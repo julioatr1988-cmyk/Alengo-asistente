@@ -31,7 +31,7 @@ No hay tests automatizados. La verificación es `tsc --noEmit` en ambas configs.
 
 ## Arquitectura
 
-**Stack**: Electron 29 (Node.js 20) · React 18 · TypeScript · Vite · Tailwind · Zustand · sql.js · Baileys v7
+**Stack**: Electron 29 (Node.js 20) · React 18 · TypeScript · Vite · Tailwind · Zustand · sql.js · Baileys v7 · v1.4.3
 
 App de escritorio para call centers de transporte interprovincial en Ecuador. Gestiona viajes, choferes, turnos, pagos mensuales, y tiene bot automático de WhatsApp y Facebook Messenger.
 
@@ -93,6 +93,8 @@ El `import type` estático sí funciona porque no genera código en runtime.
 - Cerrar sin logout: `sock.end(undefined)`. Logout del usuario: `await sock.logout()` + borrar `wa-session/`.
 - La sesión persiste en `AppData/wa-session/` via `useMultiFileAuthState`.
 - Al conectar, carga historial via `messaging-history.set` y grupos via `groupFetchAllParticipating()`.
+- Nombres de contactos se persisten en tabla `contactos_wa` (JID → nombre). Fuentes: `contacts.upsert`, `contacts.update`, `messaging-history.set` (campo `contacts`), y `pushName` de mensajes entrantes. `getContactoNombre(jid)` → fallback cuando `pushName` no está disponible.
+- Al reconectar (`connection === 'open'`), se llama `limpiarConversacionesAntiguas(8)` para resetear conversaciones del bot atascadas más de 8 horas — evita que clientes verificados sean tratados como nuevos.
 - Fotos de verificación de clientes: `AppData/verificaciones/`.
 
 **Estado de conexión** (`waSocket`, `waConnected`, `waConnecting`, `waQrTimer` en main.ts):

@@ -24,6 +24,7 @@ import {
   getTarifasZonas, upsertTarifaZona, getTarifasEncTamanos, upsertTarifaEncTamano,
   getViajeGrupos, getViajesByGrupo, updateViajeGrupoEstado, createViajeConGrupo,
   saveEdicionTurnos,
+  upsertContactoWa, upsertContactosWaBatch, getContactoNombre, limpiarConversacionesAntiguas,
 } from './database'
 import { procesarMensaje, type SendFn } from './bot'
 import {
@@ -144,6 +145,27 @@ async function iniciarWhatsApp(win: BrowserWindow) {
     sock.ev.on('creds.update', saveCreds)
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    sock.ev.on('contacts.upsert', (contactsArr: any[]) => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const batch: Array<{ jid: string; nombre: string }> = []
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      for (const c of contactsArr as any[]) {
+        const nombre = (c.name || c.notify) as string | undefined
+        if (c.id && nombre) batch.push({ jid: c.id as string, nombre })
+      }
+      if (batch.length) upsertContactosWaBatch(batch)
+    })
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    sock.ev.on('contacts.update', (updates: any[]) => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      for (const u of updates as any[]) {
+        const nombre = (u.name || u.notify) as string | undefined
+        if (u.id && nombre) upsertContactoWa(u.id as string, nombre)
+      }
+    })
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     sock.ev.on('connection.update', async (update: any) => {
       const { connection, lastDisconnect, qr } = update
 
@@ -178,6 +200,7 @@ async function iniciarWhatsApp(win: BrowserWindow) {
         if (waQrTimer) { clearTimeout(waQrTimer); waQrTimer = null }
         waConnected = true
         waConnecting = false
+        limpiarConversacionesAntiguas(8)
         // sock.user.id: '593XXXXXXXXX:NN@s.whatsapp.net'
         waPhone = sock.user?.id?.split(':')[0]?.split('@')[0] ?? null
         console.log('[WA] Conectado — número:', waPhone)
@@ -226,18 +249,28 @@ async function iniciarWhatsApp(win: BrowserWindow) {
     // Usamos saveMensajeHistorialBatch para una sola escritura a disco en lugar
     // de saveDB() por cada mensaje (evita freeze de varios segundos con historiales grandes).
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    sock.ev.on('messaging-history.set', ({ messages, chats }: any) => {
+    sock.ev.on('messaging-history.set', ({ messages, chats, contacts }: any) => {
       try {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const historial: any[] = []
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const paraBatch: Parameters<typeof saveMensajeHistorialBatch>[0] = []
 
+        // Persist contact names from history payload so they survive reconnects
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const contactsBatch: Array<{ jid: string; nombre: string }> = []
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        for (const c of (contacts ?? []) as any[]) {
+          const nombre = (c.name || c.notify) as string | undefined
+          if (c.id && nombre) contactsBatch.push({ jid: c.id as string, nombre })
+        }
+        if (contactsBatch.length) upsertContactosWaBatch(contactsBatch)
+
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         for (const chat of chats as any[]) {
           const chatJid = chat.id as string | undefined
           if (!chatJid) continue
-          const chatName = chat.name || chatJid.split('@')[0]
+          const chatName = chat.name || getContactoNombre(chatJid) || chatJid.split('@')[0]
           const esGrupoChat = isJidGroup(chatJid)
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           const chatMsgs = (messages as any[]).filter((m: any) => m.key?.remoteJid === chatJid && m.message)
@@ -291,7 +324,13 @@ async function iniciarWhatsApp(win: BrowserWindow) {
 
         const esGrupo  = isJidGroup(jid)
         const phone    = jid.split('@')[0]
-        const pushName = msg.pushName ?? phone
+        const storedName = esGrupo ? null : getContactoNombre(jid)
+        const pushName = msg.pushName || storedName || phone
+
+        // Persist pushName so the name survives reconnects
+        if (!esGrupo && msg.pushName && msg.pushName !== phone) {
+          upsertContactoWa(jid, msg.pushName as string)
+        }
 
         // Mensaje de ubicación GPS
         const locMsg = msg.message?.locationMessage

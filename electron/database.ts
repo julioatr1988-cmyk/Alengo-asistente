@@ -159,6 +159,11 @@ function createTables() {
       fecha_vencimiento TEXT NOT NULL,
       ultima_validacion TEXT
     );
+    CREATE TABLE IF NOT EXISTS contactos_wa (
+      jid TEXT PRIMARY KEY,
+      nombre TEXT NOT NULL,
+      updated_at TEXT DEFAULT (datetime('now','localtime'))
+    );
   `)
 
   // Migrations para bases de datos existentes
@@ -987,5 +992,44 @@ export function upsertTarifaEncTamano(id: number | null, descripcion: string, pr
   } else {
     db.run('INSERT OR REPLACE INTO tarifas_enc_tamanos (descripcion, precio, activo) VALUES (?,?,1)', p(descripcion, precio))
   }
+  saveDB()
+}
+
+// ── Contactos WA ──────────────────────────────────────────────────────────────
+
+export function upsertContactoWa(jid: string, nombre: string) {
+  runSQL(
+    `INSERT INTO contactos_wa (jid, nombre, updated_at)
+     VALUES (?, ?, datetime('now','localtime'))
+     ON CONFLICT(jid) DO UPDATE SET nombre=excluded.nombre, updated_at=excluded.updated_at`,
+    p(jid, nombre)
+  )
+}
+
+export function upsertContactosWaBatch(contacts: Array<{ jid: string; nombre: string }>) {
+  for (const c of contacts) {
+    try {
+      db.run(
+        `INSERT INTO contactos_wa (jid, nombre, updated_at)
+         VALUES (?, ?, datetime('now','localtime'))
+         ON CONFLICT(jid) DO UPDATE SET nombre=excluded.nombre, updated_at=excluded.updated_at`,
+        p(c.jid, c.nombre)
+      )
+    } catch { /* ignore */ }
+  }
+  saveDB()
+}
+
+export function getContactoNombre(jid: string): string | null {
+  return (getOne('SELECT nombre FROM contactos_wa WHERE jid = ?', [jid])?.nombre as string) ?? null
+}
+
+export function limpiarConversacionesAntiguas(horasMax = 8) {
+  const horas = Math.floor(Number(horasMax)) || 8
+  db.run(
+    `DELETE FROM bot_conversations
+     WHERE estado != 'idle'
+     AND (updated_at IS NULL OR datetime(updated_at, '+${horas} hours') < datetime('now','localtime'))`
+  )
   saveDB()
 }

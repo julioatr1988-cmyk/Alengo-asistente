@@ -9,7 +9,7 @@ module.exports = {
   },
   extraMetadata: {
     description: 'Alengo Asistente Virtual - Sistema de gestión para empresas de transporte interprovincial',
-    version: '1.4.2',
+    version: '1.4.3',
   },
   files: [
     'dist/**/*',
