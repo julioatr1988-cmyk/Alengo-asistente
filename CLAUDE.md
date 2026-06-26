@@ -2,235 +2,174 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## Commands
+## Regla obligatoria: usar Context7 para estas librerías
+
+Antes de escribir o corregir código que involucre `@whiskeysockets/baileys`, `electron`, `electron-builder`, `electron-updater`, `sql.js`, `React` o `TypeScript`, consultar la documentación actual con Context7. Varios bugs concretos vinieron de detalles que cambiaron (error "browser is already running", rutas WASM de sql.js con Node 20, ícono del instalador).
+
+## Comandos
 
 ```bash
-# Desarrollo (Vite en :5173, Electron en paralelo)
+# Desarrollo (Vite en :5173 + Electron en paralelo)
 npm run dev
 
 # Verificar TypeScript — AMBAS configs son necesarias
-npx tsc --noEmit                              # renderer (React, usa tsconfig.json)
-npx tsc -p tsconfig.electron.json --noEmit   # main process (Electron)
+./node_modules/.bin/tsc --noEmit                             # renderer (src/)
+./node_modules/.bin/tsc -p tsconfig.electron.json --noEmit  # main process (electron/)
 
 # Build y empaquetado
-npm run build        # compila TS + Vite
-npm run dist:win     # genera instalador Windows (.exe)
+npm run build       # compila TS + Vite
+npm run dist:win    # genera instalador Windows (.exe) en release/
 
-# Desplegar Worker de licencias (desde workers/)
+# Publicar release a GitHub (requiere GH_TOKEN)
+GH_TOKEN=$(gh auth token) ./node_modules/.bin/electron-builder --win --publish always
+
+# Desplegar Worker de licencias
 cd workers && npx wrangler deploy
 ```
 
-No hay tests automatizados. La verificación es `tsc --noEmit` en ambas configs. `tsconfig.node.json` solo cubre `vite.config.ts` — no lo uses para verificar `electron/`.
+No hay tests automatizados. La verificación es `tsc --noEmit` en ambas configs. `tsconfig.node.json` solo cubre `vite.config.ts` — no usarlo para verificar `electron/`. Los errores del main process no aparecen en la config del renderer.
 
-## Arquitectura general
+## Arquitectura
 
-**Stack**: Electron 29 (Node.js 20) · React 18 · TypeScript · Vite · Tailwind · Zustand · sql.js
-**Versión actual**: 1.4.1 (ver package.json). `whatsapp-web.js` y `better-sqlite3` fueron removidos — el proyecto usa Baileys + sql.js únicamente.
+**Stack**: Electron 29 (Node.js 20) · React 18 · TypeScript · Vite · Tailwind · Zustand · sql.js · Baileys v7
 
-El proyecto es una app de escritorio para call centers de transporte interprovincial en Ecuador. Gestiona viajes, choferes, turnos, pagos, y tiene bot de WhatsApp y Messenger.
-
-### Procesos y capas
+App de escritorio para call centers de transporte interprovincial en Ecuador. Gestiona viajes, choferes, turnos, pagos mensuales, y tiene bot automático de WhatsApp y Facebook Messenger.
 
 ```
 Renderer (React/Vite)          Main process (Electron/Node)
-  src/pages/                     electron/main.ts       ← IPC handlers + WA client + auto-updater
-  src/components/                electron/database.ts   ← SQLite (sql.js)
+  src/pages/                     electron/main.ts       ← IPC handlers + cliente WA + auto-updater
+  src/components/                electron/database.ts   ← SQLite via sql.js WASM
   src/store/useAppStore.ts       electron/bot.ts        ← máquina de estados del bot
-  src/types/index.ts             electron/messenger.ts  ← polling Graph API FB
+  src/types/index.ts             electron/messenger.ts  ← polling Graph API Facebook
         │                                │
         └──── electron/preload.ts ───────┘
                contextBridge → window.electronAPI
 ```
 
-Toda comunicación renderer↔main pasa por `ipcRenderer.invoke` / `ipcMain.handle`. El preload.ts expone la API tipada completa. Cualquier función nueva en database.ts necesita: export en database.ts → import en main.ts → handler `ipcMain.handle` → entrada en preload.ts → tipo en `Window.electronAPI` en types/index.ts.
+Toda comunicación renderer↔main pasa por `ipcRenderer.invoke` / `ipcMain.handle`. Cualquier función nueva en database.ts requiere el flujo completo: export → import en main.ts → `ipcMain.handle` → entrada en preload.ts → tipo en `Window.electronAPI` en `src/types/index.ts`.
 
-### Base de datos (sql.js)
+## Base de datos (sql.js)
 
-SQLite corre en WASM en memoria, persistido manualmente en `AppData/Roaming/alengo-asistente/database.sqlite`.
+SQLite corre en WASM en memoria, persistido en `AppData/Roaming/alengo-asistente/database.sqlite`.
 
-- **`saveDB()`** debe llamarse tras cada escritura. `runSQL()` la llama automáticamente; las escrituras directas con `db.run()` dentro de loops (migraciones, seeds) no la llaman — se llama al final del bloque.
+- **`saveDB()`** escribe el DB completo a disco (síncrono). `runSQL()` la llama automáticamente. Las escrituras directas con `db.run()` dentro de loops (migraciones, seeds) no la llaman — llamar al final del bloque.
+- **Operaciones bulk**: usar `db.run()` en el loop y `saveDB()` una sola vez al final. **Nunca** llamar `runSQL()` en un loop de cientos de registros — cada llamada escribe todo el archivo al disco y congela el proceso. Ver `saveMensajeHistorialBatch()` como ejemplo del patrón correcto.
 - **`getAll()` / `getOne()`** para lecturas; devuelven `Record<string, SqlValue>[]`.
-- **Migraciones**: array `migrations` en `createTables()` — cada entrada es una SQL idempotente (SQLite no tiene `ADD COLUMN IF NOT EXISTS`, se usa try/catch con comentario `/* columna ya existe */`).
-- **Seed**: `seedData()` usa `INSERT OR IGNORE` — es seguro correr en cada arranque.
-- `initDB()` en arranque: `createTables()` → `seedData()` → `migrarViajesAGrupos()` → `saveDB()`.
-- **WASM en app empaquetada**: En Node.js 20 `fetch()` es global y sql.js lo puede usar con rutas internas del asar (que fallan). Solución: siempre usar path explícito:
-  ```typescript
-  app.isPackaged
-    ? path.join(process.resourcesPath, 'app.asar.unpacked', 'node_modules', 'sql.js', 'dist', 'sql-wasm.wasm')
-    : path.join(__dirname, '..', 'node_modules', 'sql.js', 'dist', 'sql-wasm.wasm')
-  ```
-  El WASM está en `asarUnpack` en electron-builder.config.js.
+- **Migraciones**: array `migrations` en `createTables()`. SQLite no tiene `ADD COLUMN IF NOT EXISTS` — usar try/catch con `/* columna ya existe */`.
+- **Seed**: `seedData()` usa `INSERT OR IGNORE` — seguro en cada arranque.
+- `initDB()`: `createTables()` → `seedData()` → `migrarViajesAGrupos()` → `saveDB()`.
 
-**Tablas de tarifas por zona** (agregadas en v1.3.2):
-- `tarifas_zonas (ciudad, zona, tipo, recargo, activo)` — `UNIQUE(ciudad, zona, tipo)`. `tipo` = `'pasajero'` | `'encomienda'`. Para pasajeros QUITO el `recargo` es el precio total (no un suplemento); para STO y encomiendas es un recargo adicional. CRUD: `getTarifasZonas(ciudad?, tipo?)` / `upsertTarifaZona(ciudad, zona, tipo, recargo)`.
-- `tarifas_enc_tamanos (descripcion, precio, activo)` — tamaños de paquete con precio base. CRUD: `getTarifasEncTamanos()` / `upsertTarifaEncTamano(id, descripcion, precio)`.
+**WASM en app empaquetada** (Node.js 20 tiene `fetch()` global, sql.js lo usa para rutas internas del asar que fallan):
+```typescript
+app.isPackaged
+  ? path.join(process.resourcesPath, 'app.asar.unpacked', 'node_modules', 'sql.js', 'dist', 'sql-wasm.wasm')
+  : path.join(__dirname, '..', 'node_modules', 'sql.js', 'dist', 'sql-wasm.wasm')
+```
+El WASM está en `asarUnpack` en `electron-builder.config.js`.
 
-### Modelo de datos clave: viaje_grupos
+**Tarifas por zona** (`tarifas_zonas`): `UNIQUE(ciudad, zona, tipo)`. `tipo` = `'pasajero'` | `'encomienda'`. Para pasajeros QUITO el `recargo` es el precio total (no suplemento); para STO y encomiendas es un recargo adicional.
 
-Un **`viaje_grupo`** representa un vehículo físico (chofer + ruta + fecha + hora). Varios **`viajes`** (pasajeros/encomiendas) pertenecen al mismo grupo vía `viaje_grupo_id`.
+## Modelo viaje_grupos
+
+Un `viaje_grupo` es un vehículo físico (chofer + ruta + fecha + hora). Varios `viajes` pertenecen al mismo grupo vía `viaje_grupo_id`.
 
 Reglas críticas:
-- `cupo_ocupado` solo cuenta **pasajeros** (`cant_pasajeros`). Las encomiendas usan `cantUnidades = 0` y no modifican cupo.
-- `getOrCreateViajeGrupo()`: si `cantUnidades === 0`, busca cualquier grupo activo del slot sin tocar cupo; si hay cupo disponible reutiliza grupo existente; si está lleno crea uno nuevo con `asignarChofer()`.
-- `asignarChofer(rutaId, hora, fecha?)`: filtra por `rutas_asignadas LIKE '%"CODIGO"%'` y excluye choferes que ya tienen un grupo activo en ese slot ruta+fecha+hora. Fallback: ignora la exclusión si todos están ocupados.
-- Usar siempre `createViajeConGrupo()` para crear viajes — nunca llamar `createViaje()` + `asignarChofer()` por separado.
-- `createViajeConGrupo()` retorna `{ viaje, grupo }` donde `grupo` incluye `chofer_grupo_wa_id` y `chofer_telefono` (obtenidos en la misma llamada). Al crear un viaje, main.ts envía WA al grupo del chofer Y a su número personal (`593XXXXXXXXX@s.whatsapp.net`).
+- `cupo_ocupado` solo cuenta pasajeros (`cant_pasajeros`). Encomiendas usan `cantUnidades = 0`.
+- Usar siempre `createViajeConGrupo()` — nunca `createViaje()` + `asignarChofer()` por separado.
+- `createViajeConGrupo()` retorna `{ viaje, grupo }` donde `grupo` incluye `chofer_grupo_wa_id` y `chofer_telefono`.
+- `asignarChofer(rutaId, hora, fecha?)`: filtra por `rutas_asignadas LIKE '%"CODIGO"%'` y excluye choferes con grupo activo en ese slot. Fallback: ignora exclusión si todos están ocupados.
 
-### Tabla ediciones_turnos
+## WhatsApp (Baileys v7)
 
-Registra ediciones que el operador hace al mensaje de turnos antes de publicarlo en WhatsApp. Solo se inserta cuando el texto final difiere del generado automáticamente.
-
-- Función: `saveEdicionTurnos(fecha, textoGenerado, textoEditado)` en database.ts
-- IPC: `edicionTurnos:save`
-- Propósito: análisis posterior de qué corrige el operador para mejorar la generación automática.
-
-### Bot de WhatsApp (bot.ts)
-
-Máquina de estados con `BotEstado` guardado en tabla `bot_conversations` (por JID).
-
-**Flujo pasajero** (destinos que tienen zonas: QUITO y SANTO DOMINGO):
-```
-pedir_destino → pedir_zona* → pedir_fecha_hora → pedir_pasajeros → pedir_nombre
-  → pedir_para_quien → (pedir_telefono?) → pedir_origen → pedir_factura → crear viaje
-```
-`*pedir_zona` se salta si el usuario ya menciona un barrio/sector reconocido en el mismo mensaje que el destino. Para GUAYAQUIL y MANTA no hay `pedir_zona` (precio plano).
-
-**Flujo encomienda**:
-```
-pedir_destino_enc → pedir_tamano_enc → pedir_zona_enc* → pedir_remitente_enc
-  → pedir_destinatario_enc → pedir_entrega_enc → crear viaje (tipo='encomienda')
-```
-`*pedir_zona_enc` pide el barrio de entrega en QUITO; suma el recargo de zona al precio base del tamaño.
-
-**Precio final en `pedir_factura`**: `datos.precio_zona ?? rutaCfg.precio` por pasajero. `datos.precio_zona` queda seteado desde `pedir_zona` (precio de la zona para QUITO/STO) o desde `pedir_destino` si el usuario ya mencionó el sector.
-
-**Estado idle — detecciones especiales** (antes de FAQ y flujo normal):
-- "Chofer no llegó" → responde con teléfono de la empresa.
-- "Cancelar mi viaje" → busca viaje activo con `getMostRecentViajeByPhone()`, llama `cancelarViaje()`.
-
-Antes de procesar cualquier input como valor literal de campo en flujo activo, se evalúa:
-1. `detectarInterrupcion()` → cancelar / precio / disponibilidad / saludo
-2. FAQ lookup contra tabla `preguntas_frecuentes`
-
-Grupos WhatsApp (`@g.us`) son ignorados por el bot (`esGrupo(jid)` check al inicio de `procesarMensaje`).
-
-**Notificación al chofer**: Al confirmar una reserva de pasajero vía bot, se envía el resumen del grupo al `chofer_grupo_wa_id` Y al número personal del chofer (`chofer_telefono` → `593XX...@s.whatsapp.net`). El mensaje de confirmación al cliente incluye el teléfono del chofer si está disponible.
-
-### Auto-updater (main.ts)
-
-`electron-updater` revisa actualizaciones 10 segundos después del arranque (omitido en dev). `autoDownload: true` — descarga en segundo plano. `autoInstallOnAppQuit: true`.
-
-- `update:available` → renderer muestra banner con versión y "Descargando..."
-- `update:downloaded` → botón "Actualizar" se activa; al pulsar se llama `autoUpdater.quitAndInstall()` via IPC `update:install`.
-- Configuración de GitHub en `electron-builder.config.js`: `owner: 'julioatr1988-cmyk'`, `repo: 'Alengo-asistente'`.
-- Para publicar: subir `AlengoAsistente-Setup.exe`, `.exe.blockmap` y `latest.yml` al release de GitHub.
-
-### Job de fondo (main.ts `startBackgroundInterval`)
-
-Corre cada 60 s. Busca `viaje_grupos` activos cuya hora+duración_horas ya pasó y los marca `completado` vía `updateViajeGrupoEstado()`, que también actualiza todos sus viajes hijos. Luego mueve el `ciudad_actual` del chofer al destino de la ruta.
-
-Al crear un viaje (IPC `viajes:create` o vía bot), se emite `viajes:updated` para que el Dashboard recargue grupos y turnos.
-
-### WhatsApp (main.ts) — bugs conocidos resueltos en v1.4.1
-
-- **Freeze al cargar historial**: `messaging-history.set` usaba `saveMensajeHistorial()` por cada mensaje → `saveDB()` n veces. Resuelto con `saveMensajeHistorialBatch()` que hace un solo `saveDB()` al final.
-- **`waConnecting` bloqueado para siempre**: si el QR se mostraba pero no se escaneaba, `waConnecting` nunca se reseteaba. Resuelto con `waQrTimer` (timeout de 2 min) que libera el estado y notifica al usuario.
-- **`fetchLatestBaileysVersion()` podía colgar**: sin red, la petición no tenía límite de tiempo. Resuelto con `Promise.race` y timeout de 8s + versión fallback.
-- **`shell:openExternal` sin validación**: acepta ahora solo URLs que empiezen con `http://` o `https://`.
-- **`shell:openPath` sin validación**: acepta ahora solo rutas dentro de `app.getPath('userData')`.
-
-### WhatsApp (main.ts)
-
-Cliente `@whiskeysockets/baileys` v7 (WebSocket puro, sin navegador/Puppeteer). La sesión persiste en `AppData/wa-session/` via `useMultiFileAuthState`. Al conectar, carga historial via evento `messaging-history.set` y grupos via `groupFetchAllParticipating()`. Fotos de verificación de clientes se guardan en `AppData/verificaciones/`.
-
-**Importante**: Baileys es ESM-only (`"type": "module"`). El main process de Electron compila a CJS, así que TypeScript convertiría `import()` a `require()` (que falla con ESM). Solución: usar `new Function` para preservar el dynamic import real en el output CJS:
+Baileys es ESM-only. El main process compila a CJS — TypeScript convertiría `import()` a `require()` (que falla con ESM). Solución:
 ```typescript
 const esmImport = (m: string): Promise<any> => new Function('m', 'return import(m)')(m)
 const { default: makeWASocket, ... } = await esmImport('@whiskeysockets/baileys')
 ```
-El `import type` para TypeScript sí puede ser estático (no genera código en runtime): `import type { WASocket } from '@whiskeysockets/baileys'`. NO instalar pino — pino v10+ tampoco es compatible con el Node.js de Electron 28 y fue removido.
+El `import type` estático sí funciona porque no genera código en runtime.
 
-JIDs: individuales usan `@s.whatsapp.net` (no `@c.us` como whatsapp-web.js), grupos siguen usando `@g.us`.
+- **NO instalar pino** — pino v10+ no es compatible con el Node.js de Electron 28.
+- JIDs individuales: `@s.whatsapp.net` (no `@c.us`). Grupos: `@g.us`.
+- Cerrar sin logout: `sock.end(undefined)`. Logout del usuario: `await sock.logout()` + borrar `wa-session/`.
+- La sesión persiste en `AppData/wa-session/` via `useMultiFileAuthState`.
+- Al conectar, carga historial via `messaging-history.set` y grupos via `groupFetchAllParticipating()`.
+- Fotos de verificación de clientes: `AppData/verificaciones/`.
 
-Para cerrar sin logout (app cerrándose): `sock.end(undefined)`. Para logout del usuario: `await sock.logout()` luego borrar sessionDir.
+**Estado de conexión** (`waSocket`, `waConnected`, `waConnecting`, `waQrTimer` en main.ts):
+- `waConnecting = true` desde que empieza `iniciarWhatsApp` hasta `connection === 'open'` o `'close'`.
+- `waQrTimer`: si el QR se muestra y no se escanea en 2 minutos, resetea `waConnecting` y notifica al usuario. Sin esto, la app quedaría trabada sin poder reconectar.
+- `fetchLatestBaileysVersion()` tiene timeout de 8s via `Promise.race` con versión fallback — evita colgar la conexión si no hay red.
+- Reconexión automática: 3 segundos tras cierre, solo si `statusCode !== DisconnectReason.loggedOut`.
 
-Los mensajes salientes del bot se emiten al renderer via `win.webContents.send('whatsapp:message', ...)` para que aparezcan en el chat en tiempo real.
+## Bot de WhatsApp (bot.ts)
 
-### TypeScript configs
+Máquina de estados con `BotEstado` en tabla `bot_conversations` (por JID). Grupos `@g.us` son ignorados.
 
-| Archivo | Scope | Uso |
-|---------|-------|-----|
-| `tsconfig.json` | `src/` (renderer React) | build + check |
-| `tsconfig.electron.json` | `electron/` | build + check (`--noEmit`) |
-| `tsconfig.node.json` | `vite.config.ts` solo | check interno de Vite |
+**Flujo pasajero**:
+```
+pedir_destino → pedir_zona* → pedir_fecha_hora → pedir_pasajeros → pedir_nombre
+  → pedir_para_quien → (pedir_telefono?) → pedir_origen → pedir_factura → crear viaje
+```
+`*pedir_zona` se salta si el usuario ya menciona un barrio reconocido. QUITO y SANTO DOMINGO tienen zonas con precios diferenciados; GUAYAQUIL y MANTA tienen precio plano.
 
-Los errores de `electron/` no aparecen en `tsc --noEmit` (que usa tsconfig.json). Siempre correr `tsc -p tsconfig.electron.json --noEmit` también.
+**Flujo encomienda**:
+```
+pedir_destino_enc → pedir_tamano_enc → pedir_zona_enc → pedir_remitente_enc
+  → pedir_destinatario_enc → pedir_entrega_enc → crear viaje (tipo='encomienda')
+```
+
+**Precio final**: `datos.precio_zona ?? rutaCfg.precio`. `datos.precio_zona` se setea en `pedir_zona` o si el usuario mencionó el sector en el mismo mensaje del destino.
+
+**En estado idle**, antes del flujo normal:
+1. Detección "chofer no llegó" → teléfono de empresa.
+2. Detección "cancelar viaje" → `getMostRecentViajeByPhone()` + `cancelarViaje()`.
+3. FAQ lookup contra `preguntas_frecuentes`.
+
+**En flujo activo**, antes de capturar como valor literal:
+1. `detectarInterrupcion()` → cancelar / precio / disponibilidad / saludo.
+2. FAQ lookup.
+
+## Auto-updater
+
+`electron-updater` revisa actualizaciones 10s después del arranque (omitido en dev). `autoDownload = false` pero el handler de `update-available` llama `downloadUpdate()` manualmente — en la práctica es auto-descarga con control de errores. `autoInstallOnAppQuit: true`.
+
+- GitHub: `owner: 'julioatr1988-cmyk'`, `repo: 'Alengo-asistente'` en `electron-builder.config.js`.
+- Para publicar: `AlengoAsistente-Setup.exe` + `.exe.blockmap` + `latest.yml` deben estar en el release de GitHub.
+- `verifyUpdateCodeSignature = false` — no hay Code Signing Certificate.
 
 ## Comportamientos críticos de UI
 
-### NuevoViajeModal — no cerrar en onCreated
-
-El callback `onCreated` en Dashboard **no debe** cerrar el modal (`setShowModal(false)`). El modal muestra una pantalla de confirmación interna y el usuario la cierra manualmente con "Cerrar". Si `onCreated` cierra el modal inmediatamente, el usuario no ve la confirmación y cree que nada pasó, lo que provoca clics múltiples y viajes duplicados.
-
-Dashboard.tsx correcto:
+**NuevoViajeModal**: `onCreated` en Dashboard **no debe** llamar `setShowModal(false)`. El modal muestra confirmación interna; cerrarlo desde fuera evita que el usuario la vea y provoca clics duplicados.
 ```tsx
-onCreated={() => { void loadTurnos(); void loadGrupos() }}
-// NO: onCreated={() => { setShowModal(false); void loadTurnos(); ... }}
+onCreated={() => { void loadTurnos(); void loadGrupos() }}  // correcto
 ```
 
-### "Publicar en grupo" — vista previa editable
+**"Publicar en grupo"**: no envía directo. Abre modal con `<textarea>` editable. Si el texto fue modificado, se guarda en `ediciones_turnos`.
 
-Clic en "Publicar en grupo" **no envía directo a WhatsApp**. Abre un modal con el mensaje en un `<textarea>` editable. Solo al confirmar se envía. Si el texto fue modificado respecto al generado, se guarda en `ediciones_turnos`.
+**Activacion.tsx**: no mostrar precios ($50/$90) en la pantalla de activación de licencia.
 
-### Activacion.tsx — sin precios
+## Job de fondo
 
-La pantalla de activación de licencia no muestra precios ($50/$90). No agregar esos bloques de nuevo.
+`startBackgroundInterval()` corre cada 60s. Marca `viaje_grupos` activos como `completado` cuando `hora + duracion_horas` ya pasó, y actualiza `ciudad_actual` del chofer al destino de la ruta.
 
-## Panel de administración de licencias (workers/)
+## Panel de licencias (workers/)
 
-Separado de la app Electron — es un Cloudflare Worker que sirve tanto la API de licencias como un panel web de administración.
+Cloudflare Worker en `workers/license-worker.js`. Sirve API de licencias + panel admin web.
 
-```
-workers/
-  license-worker.js   ← Worker + panel HTML embebido en GET /
-  admin.html          ← Copia standalone del panel (puede abrirse localmente)
-  wrangler.toml       ← KV namespace LICENSES, secret ADMIN_SECRET
-```
+Endpoints públicos: `GET /validate?key=&fingerprint=`, `POST /activate { key, fingerprint }`.  
+Endpoints admin (Bearer `ADMIN_SECRET`): `/admin/list`, `/admin/create`, `/admin/toggle`, `/admin/renew`, `/admin/transfer`.
 
-**Endpoints públicos** (sin auth):
-- `GET /validate?key=...&fingerprint=...` — validar licencia
-- `POST /activate` `{ key, fingerprint }` — activar primera vez
+**Trampa crítica**: el HTML del panel está en un template literal (backticks). `\'` dentro → `'` en el HTML servido, lo que rompe strings JS en `<script>`. `\n` → salto de línea real, SyntaxError en strings de una línea. Solución: atributos `data-*` para valores dinámicos; nunca strings con comilla simple que contengan datos del servidor.
 
-**Endpoints admin** (`Authorization: Bearer <ADMIN_SECRET>`):
-- `GET /admin/list` — listar todas las licencias
-- `POST /admin/create` `{ empresa, email?, plan }` — generar clave nueva
-- `POST /admin/toggle` `{ key }` — activar/revocar
-- `POST /admin/renew` `{ key, meses }` — extender vencimiento
-- `POST /admin/transfer` `{ key }` — resetear fingerprint de PC
+Verificar JS del panel: `curl -s <URL>/ | sed -n '/<script>/,/<\/script>/p' | sed '1d;$d' | node --check`
 
-**Auth del panel**: la clave de admin es el `ADMIN_SECRET` configurado como secret de Cloudflare (`wrangler secret put ADMIN_SECRET`). El panel la pide en login y la guarda en `localStorage`. Nunca está en el código ni en wrangler.toml.
+## Fingerprint de licencia
 
-**Estructura KV** (por clave `ALENGO-XXXX-XXXX-XXXX`):
-```json
-{ "clave", "empresa", "email", "plan", "fecha_creacion", "fecha_vencimiento",
-  "activo", "activada", "fecha_primera_activacion", "fingerprint_pc" }
-```
+`getFingerprint()` en main.ts: hash SHA-256 de `hostname + hasta 3 MACs` (excluyendo interfaces virtuales/VPN). Truncado a 32 chars hex. Identifica el equipo para activación.
 
-**Trampa crítica — template literal en `license-worker.js`**
-
-El HTML del panel (`ADMIN_HTML`) es un template literal (backticks). Dentro de él, los escapes de JS para el bloque `<script>` embebido tienen comportamiento inesperado:
-
-- `\'` en template literal → `'` en el HTML servido. Si ese `'` está dentro de un string de comilla simple en el `<script>`, rompe la sintaxis JS del string (string literals adyacentes sin `+`). **Solución**: usar atributos `data-*` para valores dinámicos en handlers onclick, leer con `this.dataset.key`.
-- `\n` en template literal → salto de línea real. Dentro de un string de comilla simple en `<script>`, es un SyntaxError. **Solución**: reemplazar con espacio o concatenar `+ '\n' +` como string separado.
-
-Ambos errores producen un `SyntaxError` que impide que el `<script>` entero cargue — el panel muestra el formulario de login pero el botón "Entrar" no hace nada.
-
-Para verificar el JS del panel desplegado: `curl -s <URL>/ | sed -n '/<script>/,/<\/script>/p' | sed '1d;$d' | node --check`
-
-## Inicializar con DB limpia
+## Reset de datos
 
 ```powershell
-# Detener app, borrar DB, reiniciar
+# Borrar solo la BD (sesión WA se conserva)
 Remove-Item "$env:APPDATA\alengo-asistente\database.sqlite" -Force
-# La sesión WA se conserva en wa-session/
 ```
