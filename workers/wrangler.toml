@@ -1,0 +1,10 @@
+name = "alengo-licenses"
+main = "license-worker.js"
+compatibility_date = "2024-01-01"
+
+[[kv_namespaces]]
+binding = "LICENSES"
+id = "50734dbcd9d544a3b9762758b991fa04"
+
+[vars]
+# ADMIN_SECRET se configura como secret (no aquí): wrangler secret put ADMIN_SECRET

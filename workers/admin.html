@@ -1,0 +1,466 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Alengo — Admin Licencias</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    .field { @apply w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-[#0F1E3C] transition-colors; }
+    .label-f { @apply block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1; }
+    .btn-ghost { @apply border border-gray-200 rounded-lg px-4 py-2 text-sm text-gray-600 hover:bg-gray-50 transition-colors; }
+    .btn-primary { @apply bg-[#0F1E3C] text-white rounded-lg px-4 py-2 text-sm font-semibold hover:opacity-90 transition-opacity; }
+  </style>
+</head>
+<body class="bg-gray-50 text-gray-900 min-h-screen">
+
+<!-- ── LOGIN ─────────────────────────────────────────────────────────────── -->
+<div id="page-login" class="min-h-screen flex items-center justify-center p-4">
+  <div class="bg-white rounded-2xl shadow-xl p-8 w-full max-w-sm">
+    <div class="text-center mb-6">
+      <div class="inline-flex items-center justify-center w-14 h-14 bg-[#0F1E3C] rounded-2xl mb-4">
+        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24">
+          <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+        </svg>
+      </div>
+      <h1 class="text-xl font-bold text-gray-900">Alengo Admin</h1>
+      <p class="text-sm text-gray-400 mt-1">Panel de licencias</p>
+    </div>
+    <label class="label-f">Clave de administrador</label>
+    <input id="inp-secret" type="password"
+      class="field mb-3"
+      placeholder="••••••••••••••••" />
+    <p id="login-error" class="hidden text-xs text-red-600 mb-3">Clave incorrecta. Verifica y vuelve a intentarlo.</p>
+    <button id="btn-login" class="btn-primary w-full py-2.5">Entrar</button>
+  </div>
+</div>
+
+<!-- ── DASHBOARD ─────────────────────────────────────────────────────────── -->
+<div id="page-dashboard" class="hidden min-h-screen flex flex-col">
+
+  <!-- Header -->
+  <header class="bg-[#0F1E3C] text-white px-6 py-3 flex items-center justify-between flex-shrink-0">
+    <div>
+      <span class="font-bold text-base">Alengo</span>
+      <span class="text-blue-300 text-xs ml-2">/ Admin Licencias</span>
+    </div>
+    <button id="btn-logout" class="text-blue-300 text-xs hover:text-white transition-colors">Cerrar sesión</button>
+  </header>
+
+  <!-- Stats -->
+  <div class="grid grid-cols-2 gap-4 p-5 pb-0 max-w-5xl w-full mx-auto">
+    <div class="bg-white rounded-xl border border-gray-100 shadow-sm p-4 flex items-center gap-4">
+      <div class="w-12 h-12 bg-green-100 rounded-xl flex items-center justify-center flex-shrink-0">
+        <span id="stat-activas" class="text-xl font-bold text-green-700">—</span>
+      </div>
+      <div>
+        <p class="text-xs text-gray-400">Licencias activas</p>
+        <p class="text-sm font-semibold text-gray-700">de <span id="stat-total">—</span> en total</p>
+      </div>
+    </div>
+    <div class="bg-white rounded-xl border border-gray-100 shadow-sm p-4 flex items-center gap-4">
+      <div class="w-12 h-12 bg-amber-100 rounded-xl flex items-center justify-center flex-shrink-0">
+        <span id="stat-vencen" class="text-xl font-bold text-amber-700">—</span>
+      </div>
+      <div>
+        <p class="text-xs text-gray-400">Vencen en 30 días</p>
+        <p class="text-sm font-semibold text-gray-700">requieren renovación</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toolbar -->
+  <div class="max-w-5xl w-full mx-auto px-5 py-4 flex items-center gap-3">
+    <input id="inp-buscar" type="search"
+      placeholder="Buscar empresa o clave…"
+      class="flex-1 border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-[#0F1E3C]" />
+    <button id="btn-refresh" class="btn-ghost px-3 py-2 text-gray-500">↻ Actualizar</button>
+    <button id="btn-crear" class="btn-primary">+ Nueva licencia</button>
+  </div>
+
+  <!-- Table -->
+  <div class="max-w-5xl w-full mx-auto px-5 pb-8 flex-1">
+    <div class="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
+      <div class="overflow-x-auto">
+        <table class="w-full text-sm">
+          <thead>
+            <tr class="border-b bg-gray-50 text-xs text-gray-500 font-semibold uppercase tracking-wide">
+              <th class="text-left px-4 py-3">Clave</th>
+              <th class="text-left px-4 py-3">Empresa</th>
+              <th class="text-left px-4 py-3">Plan</th>
+              <th class="text-left px-4 py-3">Creada</th>
+              <th class="text-left px-4 py-3">Vence</th>
+              <th class="text-left px-4 py-3">Estado</th>
+              <th class="text-left px-4 py-3">Hardware</th>
+              <th class="text-left px-4 py-3">Acciones</th>
+            </tr>
+          </thead>
+          <tbody id="tabla-body">
+            <tr><td colspan="8" class="text-center py-10 text-gray-400">Cargando…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── MODAL: Crear licencia ─────────────────────────────────────────────── -->
+<div id="modal-crear" class="hidden fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+  <div class="bg-white rounded-xl shadow-2xl w-full max-w-sm">
+    <div class="flex items-center justify-between px-5 py-4 border-b">
+      <h3 class="font-semibold text-gray-900">Nueva licencia</h3>
+      <button onclick="closeModal('modal-crear')" class="text-gray-400 hover:text-gray-600 text-lg leading-none">✕</button>
+    </div>
+    <form id="form-crear" class="p-5 space-y-4">
+      <div>
+        <label class="label-f">Empresa *</label>
+        <input id="crear-empresa" type="text" required class="field" placeholder="Transportes Ejemplo S.A." />
+      </div>
+      <div>
+        <label class="label-f">Email <span class="text-gray-400 normal-case font-normal">(opcional)</span></label>
+        <input id="crear-email" type="email" class="field" placeholder="contacto@empresa.com" />
+      </div>
+      <div>
+        <label class="label-f">Plan</label>
+        <select id="crear-plan" class="field">
+          <option value="1y">1 año (12 meses)</option>
+          <option value="6m">6 meses</option>
+        </select>
+      </div>
+      <div class="flex gap-3 pt-1">
+        <button type="button" onclick="closeModal('modal-crear')" class="btn-ghost flex-1">Cancelar</button>
+        <button type="submit" class="btn-primary flex-1">Generar clave</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- ── MODAL: Renovar licencia ───────────────────────────────────────────── -->
+<div id="modal-renovar" class="hidden fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+  <div class="bg-white rounded-xl shadow-2xl w-full max-w-sm">
+    <div class="flex items-center justify-between px-5 py-4 border-b">
+      <h3 class="font-semibold text-gray-900">Renovar licencia</h3>
+      <button onclick="closeModal('modal-renovar')" class="text-gray-400 hover:text-gray-600 text-lg leading-none">✕</button>
+    </div>
+    <div class="p-5 space-y-4">
+      <div class="bg-gray-50 rounded-lg p-3 text-sm space-y-1">
+        <p class="text-gray-500">Empresa: <strong class="text-gray-900" id="renovar-empresa">—</strong></p>
+        <p class="text-gray-500">Vencimiento actual: <span id="renovar-vence" class="font-mono">—</span></p>
+      </div>
+      <div>
+        <label class="label-f">Extender por</label>
+        <select id="renovar-meses" class="field">
+          <option value="6">6 meses</option>
+          <option value="12" selected>12 meses (1 año)</option>
+        </select>
+      </div>
+      <div class="flex gap-3 pt-1">
+        <button type="button" onclick="closeModal('modal-renovar')" class="btn-ghost flex-1">Cancelar</button>
+        <button id="btn-confirmar-renovar" class="btn-primary flex-1">Confirmar renovación</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── MODAL: Clave generada ─────────────────────────────────────────────── -->
+<div id="modal-clave" class="hidden fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+  <div class="bg-white rounded-xl shadow-2xl w-full max-w-sm">
+    <div class="p-5 text-center space-y-4">
+      <div class="w-14 h-14 bg-green-100 rounded-full flex items-center justify-center mx-auto">
+        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="none" stroke="#16a34a" stroke-width="2.5" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg>
+      </div>
+      <h3 class="font-semibold text-gray-900 text-lg">Licencia creada</h3>
+      <div>
+        <p class="text-xs text-gray-500 mb-2">Clave de licencia (comparte esto con el cliente):</p>
+        <div class="flex items-center gap-2 bg-gray-50 rounded-lg p-3 border">
+          <code id="clave-generada" class="flex-1 font-mono text-sm text-gray-900 tracking-widest text-center select-all"></code>
+          <button id="btn-copiar-clave" onclick="copiarClave()"
+            class="flex-shrink-0 px-2 py-1 text-xs bg-[#0F1E3C] text-white rounded hover:opacity-90">Copiar</button>
+        </div>
+      </div>
+      <p id="clave-vence" class="text-xs text-gray-400"></p>
+      <button onclick="closeModal('modal-clave')" class="btn-primary w-full">Listo</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── TOAST ──────────────────────────────────────────────────────────────── -->
+<div id="toast" class="hidden fixed top-4 right-4 z-[100] px-4 py-3 rounded-lg shadow-lg text-sm font-medium text-white max-w-xs"></div>
+
+<script>
+  const API = 'https://alengo-licenses.julioatr1988.workers.dev'
+  let TOKEN = localStorage.getItem('alengo_admin_token') || ''
+  let allLicenses = []
+  let renewKey = null
+  let toastTimer = null
+
+  // ── API ──────────────────────────────────────────────────────────────────────
+  async function api(path, opts = {}) {
+    const res = await fetch(API + path, {
+      ...opts,
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer ' + TOKEN,
+        ...(opts.headers || {}),
+      },
+    })
+    if (res.status === 401) { showLogin(); throw new Error('401') }
+    return res.json()
+  }
+
+  // ── Helpers ──────────────────────────────────────────────────────────────────
+  function todayStr() { return new Date().toISOString().split('T')[0] }
+
+  function esc(s) {
+    return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')
+  }
+
+  function estadoBadge(l) {
+    const t = todayStr()
+    if (!l.activo)
+      return '<span class="px-2 py-0.5 text-xs rounded-full bg-gray-100 text-gray-500 font-medium">Revocada</span>'
+    if (l.fecha_vencimiento < t)
+      return '<span class="px-2 py-0.5 text-xs rounded-full bg-red-100 text-red-700 font-medium">Vencida</span>'
+    if (!l.activada)
+      return '<span class="px-2 py-0.5 text-xs rounded-full bg-yellow-100 text-yellow-700 font-medium">Sin activar</span>'
+    return '<span class="px-2 py-0.5 text-xs rounded-full bg-green-100 text-green-700 font-medium">Activa</span>'
+  }
+
+  function planBadge(plan) {
+    return plan === '6m'
+      ? '<span class="px-2 py-0.5 text-xs rounded bg-teal-100 text-teal-700 font-medium">6 meses</span>'
+      : '<span class="px-2 py-0.5 text-xs rounded bg-blue-100 text-blue-700 font-medium">1 año</span>'
+  }
+
+  function showToast(msg, type = 'success') {
+    const el = document.getElementById('toast')
+    el.textContent = msg
+    el.className = `fixed top-4 right-4 z-[100] px-4 py-3 rounded-lg shadow-lg text-sm font-medium text-white max-w-xs ${
+      type === 'error' ? 'bg-red-600' : 'bg-green-600'
+    }`
+    clearTimeout(toastTimer)
+    toastTimer = setTimeout(() => el.classList.add('hidden'), 4000)
+  }
+
+  function closeModal(id) { document.getElementById(id).classList.add('hidden') }
+
+  // ── Render ───────────────────────────────────────────────────────────────────
+  function renderTable(lics) {
+    const q = (document.getElementById('inp-buscar').value || '').toLowerCase().trim()
+    const filtered = q
+      ? lics.filter(l => (l.empresa||'').toLowerCase().includes(q) || (l.clave||'').toLowerCase().includes(q))
+      : lics
+
+    if (!filtered.length) {
+      document.getElementById('tabla-body').innerHTML =
+        '<tr><td colspan="8" class="text-center py-10 text-gray-400">Sin resultados</td></tr>'
+      return
+    }
+
+    const t = todayStr()
+    document.getElementById('tabla-body').innerHTML = filtered.map(l => {
+      const venceProxima = l.activo && l.fecha_vencimiento >= t && l.fecha_vencimiento <= addDays(t, 30)
+      const venceColor = l.fecha_vencimiento < t ? 'text-red-600 font-semibold'
+                       : venceProxima ? 'text-amber-600 font-semibold'
+                       : 'text-gray-500'
+      const clave = esc(l.clave || '')
+      const empresa = esc(l.empresa || '—')
+      return `
+        <tr class="border-b hover:bg-gray-50 transition-colors">
+          <td class="px-4 py-3 font-mono text-xs text-gray-600 whitespace-nowrap">${clave}</td>
+          <td class="px-4 py-3 font-medium text-gray-900">${empresa}</td>
+          <td class="px-4 py-3">${planBadge(l.plan)}</td>
+          <td class="px-4 py-3 text-xs text-gray-400">${l.fecha_creacion || '—'}</td>
+          <td class="px-4 py-3 text-xs ${venceColor}">${l.fecha_vencimiento || '—'}</td>
+          <td class="px-4 py-3">${estadoBadge(l)}</td>
+          <td class="px-4 py-3 font-mono text-xs text-gray-400">${l.fingerprint_pc ? l.fingerprint_pc.slice(0,8)+'…' : '—'}</td>
+          <td class="px-4 py-3">
+            <div class="flex items-center gap-1 flex-wrap">
+              <button onclick="openRenovar('${clave}','${empresa}','${l.fecha_vencimiento||''}')"
+                class="px-2 py-1 text-xs bg-blue-50 text-blue-700 rounded hover:bg-blue-100 transition-colors">Renovar</button>
+              <button onclick="toggleLic('${clave}')"
+                class="px-2 py-1 text-xs rounded transition-colors ${
+                  l.activo ? 'bg-red-50 text-red-700 hover:bg-red-100' : 'bg-green-50 text-green-700 hover:bg-green-100'
+                }">${l.activo ? 'Revocar' : 'Activar'}</button>
+              ${l.fingerprint_pc ? `<button onclick="transferirLic('${clave}')" class="px-2 py-1 text-xs bg-gray-50 text-gray-600 rounded hover:bg-gray-100 transition-colors whitespace-nowrap">Transf. PC</button>` : ''}
+            </div>
+          </td>
+        </tr>`
+    }).join('')
+  }
+
+  function renderStats(lics) {
+    const t = todayStr()
+    const d30 = addDays(t, 30)
+    const activas  = lics.filter(l => l.activo && l.fecha_vencimiento >= t).length
+    const vencen   = lics.filter(l => l.activo && l.fecha_vencimiento >= t && l.fecha_vencimiento <= d30).length
+    document.getElementById('stat-total').textContent   = lics.length
+    document.getElementById('stat-activas').textContent = activas
+    document.getElementById('stat-vencen').textContent  = vencen
+  }
+
+  function addDays(dateStr, days) {
+    const d = new Date(dateStr)
+    d.setDate(d.getDate() + days)
+    return d.toISOString().split('T')[0]
+  }
+
+  // ── Load ─────────────────────────────────────────────────────────────────────
+  async function loadLicenses() {
+    document.getElementById('tabla-body').innerHTML =
+      '<tr><td colspan="8" class="text-center py-10 text-gray-400">Cargando…</td></tr>'
+    const data = await api('/admin/list')
+    allLicenses = data.licenses || []
+    renderTable(allLicenses)
+    renderStats(allLicenses)
+  }
+
+  // ── Login / Logout ────────────────────────────────────────────────────────────
+  function showLogin() {
+    localStorage.removeItem('alengo_admin_token')
+    TOKEN = ''
+    document.getElementById('page-login').classList.remove('hidden')
+    document.getElementById('page-dashboard').classList.add('hidden')
+    document.getElementById('login-error').classList.add('hidden')
+    document.getElementById('inp-secret').value = ''
+  }
+
+  function showDashboard() {
+    document.getElementById('page-login').classList.add('hidden')
+    document.getElementById('page-dashboard').classList.remove('hidden')
+  }
+
+  document.getElementById('btn-login').addEventListener('click', async () => {
+    const secret = document.getElementById('inp-secret').value.trim()
+    if (!secret) return
+    TOKEN = secret
+    document.getElementById('login-error').classList.add('hidden')
+    try {
+      await loadLicenses()
+      localStorage.setItem('alengo_admin_token', TOKEN)
+      showDashboard()
+    } catch {
+      document.getElementById('login-error').classList.remove('hidden')
+      TOKEN = ''
+    }
+  })
+
+  document.getElementById('inp-secret').addEventListener('keydown', e => {
+    if (e.key === 'Enter') document.getElementById('btn-login').click()
+  })
+
+  document.getElementById('btn-logout').addEventListener('click', showLogin)
+
+  // ── Search ────────────────────────────────────────────────────────────────────
+  document.getElementById('inp-buscar').addEventListener('input', () => renderTable(allLicenses))
+
+  // ── Refresh ───────────────────────────────────────────────────────────────────
+  document.getElementById('btn-refresh').addEventListener('click', () => loadLicenses().catch(() => {}))
+
+  // ── Crear ─────────────────────────────────────────────────────────────────────
+  document.getElementById('btn-crear').addEventListener('click', () => {
+    document.getElementById('crear-empresa').value = ''
+    document.getElementById('crear-email').value   = ''
+    document.getElementById('crear-plan').value    = '1y'
+    document.getElementById('modal-crear').classList.remove('hidden')
+    setTimeout(() => document.getElementById('crear-empresa').focus(), 50)
+  })
+
+  document.getElementById('form-crear').addEventListener('submit', async e => {
+    e.preventDefault()
+    const empresa = document.getElementById('crear-empresa').value.trim()
+    const email   = document.getElementById('crear-email').value.trim()
+    const plan    = document.getElementById('crear-plan').value
+    const btn     = e.target.querySelector('button[type=submit]')
+    btn.textContent = 'Generando…'
+    btn.disabled    = true
+    try {
+      const data = await api('/admin/create', {
+        method: 'POST',
+        body: JSON.stringify({ empresa, email: email || null, plan }),
+      })
+      btn.textContent = 'Generar clave'
+      btn.disabled    = false
+      if (!data.success) { showToast('Error: ' + data.error, 'error'); return }
+      closeModal('modal-crear')
+      await loadLicenses()
+      // Mostrar clave generada
+      document.getElementById('clave-generada').textContent = data.clave
+      document.getElementById('clave-vence').textContent = `Plan ${plan === '6m' ? '6 meses' : '1 año'} — vence ${data.fecha_vencimiento}`
+      document.getElementById('modal-clave').classList.remove('hidden')
+      navigator.clipboard?.writeText(data.clave).catch(() => {})
+    } catch {
+      btn.textContent = 'Generar clave'
+      btn.disabled    = false
+    }
+  })
+
+  function copiarClave() {
+    const clave = document.getElementById('clave-generada').textContent
+    navigator.clipboard?.writeText(clave).then(() => showToast('Clave copiada al portapapeles'))
+  }
+
+  // ── Toggle (revocar / activar) ────────────────────────────────────────────────
+  async function toggleLic(key) {
+    const lic    = allLicenses.find(l => l.clave === key)
+    const accion = lic?.activo ? 'revocar' : 'activar'
+    if (!confirm(`¿${accion.charAt(0).toUpperCase() + accion.slice(1)} la licencia de "${lic?.empresa}"?`)) return
+    try {
+      const data = await api('/admin/toggle', { method: 'POST', body: JSON.stringify({ key }) })
+      if (data.success) { await loadLicenses(); showToast(`Licencia ${data.activo ? 'activada' : 'revocada'}`) }
+      else showToast(data.error || 'Error', 'error')
+    } catch {}
+  }
+
+  // ── Renovar ───────────────────────────────────────────────────────────────────
+  function openRenovar(key, empresa, vence) {
+    renewKey = key
+    document.getElementById('renovar-empresa').textContent = empresa
+    document.getElementById('renovar-vence').textContent   = vence || '—'
+    document.getElementById('renovar-meses').value         = '12'
+    document.getElementById('modal-renovar').classList.remove('hidden')
+  }
+
+  document.getElementById('btn-confirmar-renovar').addEventListener('click', async () => {
+    if (!renewKey) return
+    const meses = parseInt(document.getElementById('renovar-meses').value)
+    const btn = document.getElementById('btn-confirmar-renovar')
+    btn.textContent = 'Renovando…'
+    btn.disabled    = true
+    try {
+      const data = await api('/admin/renew', { method: 'POST', body: JSON.stringify({ key: renewKey, meses }) })
+      btn.textContent = 'Confirmar renovación'
+      btn.disabled    = false
+      if (data.success) {
+        closeModal('modal-renovar')
+        await loadLicenses()
+        showToast(`Renovada hasta ${data.fecha_vencimiento}`)
+      } else {
+        showToast(data.error || 'Error al renovar', 'error')
+      }
+    } catch {
+      btn.textContent = 'Confirmar renovación'
+      btn.disabled    = false
+    }
+  })
+
+  // ── Transferir PC ─────────────────────────────────────────────────────────────
+  async function transferirLic(key) {
+    const lic = allLicenses.find(l => l.clave === key)
+    if (!confirm(`¿Resetear la huella de PC de "${lic?.empresa}"?\nLa licencia podrá activarse en un equipo diferente.`)) return
+    try {
+      const data = await api('/admin/transfer', { method: 'POST', body: JSON.stringify({ key }) })
+      if (data.success) { await loadLicenses(); showToast('Huella de PC reseteada — la licencia está lista para otro equipo') }
+      else showToast(data.error || 'Error', 'error')
+    } catch {}
+  }
+
+  // ── Init ──────────────────────────────────────────────────────────────────────
+  if (TOKEN) {
+    loadLicenses().then(showDashboard).catch(showLogin)
+  } else {
+    document.getElementById('page-login').classList.remove('hidden')
+  }
+</script>
+</body>
+</html>

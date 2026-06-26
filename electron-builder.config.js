@@ -1,0 +1,60 @@
+module.exports = {
+  appId: 'com.alengo.asistente',
+  productName: 'Alengo Asistente Virtual',
+  copyright: 'Copyright © 2025 Alengo. Todos los derechos reservados.',
+  npmRebuild: false,
+  directories: {
+    output: 'release',
+    buildResources: 'assets',
+  },
+  extraMetadata: {
+    description: 'Alengo Asistente Virtual - Sistema de gestión para empresas de transporte interprovincial',
+    version: '1.4.1',
+  },
+  files: [
+    'dist/**/*',
+    'dist-electron/**/*',
+    'node_modules/**/*',
+    '!node_modules/.bin/**/*',
+    '!node_modules/**/*.{md,markdown,txt,log}',
+    '!node_modules/**/{test,tests,__tests__,spec,specs,example,examples,demo}/**',
+    '!node_modules/**/.eslintrc*',
+    '!node_modules/**/tsconfig*.json',
+    '!node_modules/**/*.d.ts',
+    '!node_modules/better-sqlite3/**/*',
+  ],
+  asar: true,
+  asarUnpack: [
+    'node_modules/sql.js/dist/sql-wasm.wasm',
+  ],
+  win: {
+    target: [{ target: 'nsis', arch: ['x64'] }],
+    icon: 'assets/icon.ico',
+    artifactName: 'AlengoAsistente-Setup.exe',
+    executableName: 'AlengoAsistente',
+    requestedExecutionLevel: 'asInvoker',
+    legalTrademarks: 'Alengo',
+    // publisherName omitido: electron-updater omite verificación de firma digital (no tenemos Code Signing Certificate)
+  },
+  nsis: {
+    oneClick: false,
+    allowToChangeInstallationDirectory: true,
+    installerIcon: 'assets/icon.ico',
+    uninstallerIcon: 'assets/icon.ico',
+    installerHeaderIcon: 'assets/icon.ico',
+    createDesktopShortcut: true,
+    createStartMenuShortcut: true,
+    shortcutName: 'Alengo Asistente',
+    license: 'assets/license.txt',
+    include: 'assets/installer.nsh',
+    warningsAsErrors: false,
+  },
+  publish: [
+    {
+      provider: 'github',
+      owner: 'julioatr1988-cmyk',
+      repo: 'Alengo-asistente',
+      private: false,
+    },
+  ],
+}

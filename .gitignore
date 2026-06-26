@@ -1,0 +1,12 @@
+node_modules/
+dist/
+dist-electron/
+release/
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+wa-session/
+.env
+.wwebjs_cache/
+*.log
+logs/
