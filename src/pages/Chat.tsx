@@ -287,20 +287,35 @@ export function Chat() {
     const rows = await window.electronAPI.mensajes.getAll()
     const mapa = new Map<string, Conversacion>()
     for (const m of rows) {
-      const jid = m.jid || m.telefono
+      const jid = (m.jid || m.telefono) as string | undefined
       if (!jid) continue
       if (!mapa.has(jid)) {
         mapa.set(jid, {
-          jid, contacto: m.contacto, telefono: m.telefono,
+          jid, contacto: m.contacto as string, telefono: m.telefono as string,
           mensajes: [], noLeidos: 0,
-          ultimaFecha: m.fecha,
+          ultimaFecha: m.fecha as string,
           canal: (m.canal ?? 'whatsapp') as Canal,
-          messenger_psid: m.messenger_psid,
+          messenger_psid: m.messenger_psid as string | undefined,
         })
       }
       const conv = mapa.get(jid)!
-      conv.mensajes.push(m)
-      if (new Date(m.fecha) > new Date(conv.ultimaFecha)) conv.ultimaFecha = m.fecha
+      conv.mensajes.push(m as unknown as MensajeWA)
+      if (new Date(m.fecha as string) > new Date(conv.ultimaFecha)) conv.ultimaFecha = m.fecha as string
+      // Mensajes están ORDER BY fecha ASC: si éste tiene nombre real (no solo dígitos), actualizar.
+      // Así el nombre más reciente con nombre real gana sobre registros antiguos con número crudo.
+      const nombreCandidato = m.contacto as string | null
+      if (nombreCandidato && !/^\d+$/.test(nombreCandidato)) {
+        conv.contacto = nombreCandidato
+      }
+    }
+    // Aplicar nombres almacenados en contactos_wa como override final (más confiables)
+    if (window.electronAPI?.contactos) {
+      try {
+        const storedNames = await window.electronAPI.contactos.getNombres()
+        for (const [jid, conv] of mapa) {
+          if (storedNames[jid]) conv.contacto = storedNames[jid]
+        }
+      } catch { /* no bloquear si falla */ }
     }
     const convs = Array.from(mapa.values()).sort(
       (a, b) => new Date(b.ultimaFecha).getTime() - new Date(a.ultimaFecha).getTime()

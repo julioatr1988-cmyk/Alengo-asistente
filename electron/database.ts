@@ -18,9 +18,24 @@ function p(...args: unknown[]): SqlValue[] {
   return args.map(sv)
 }
 
+let dbDirty = false
+
 function saveDB() {
   const data = db.export()
   fs.writeFileSync(DB_PATH, Buffer.from(data))
+  dbDirty = false
+}
+
+// Flush periódico: escribe a disco solo cuando hay cambios pendientes.
+// Reemplaza el patrón anterior de saveDB() por INSERT — eso bloqueaba el event loop
+// de Electron en cada mensaje (la DB completa se reescribía en disco de forma síncrona).
+setInterval(() => {
+  if (dbDirty) saveDB()
+}, 1500)
+
+// Garantizar escritura antes de que la app cierre
+export function flushDB() {
+  if (dbDirty) saveDB()
 }
 
 export async function initDB() {
@@ -47,7 +62,7 @@ export async function initDB() {
 
 function runSQL(sql: string, params: SqlValue[] = []) {
   db.run(sql, params)
-  saveDB()
+  dbDirty = true
 }
 
 function getAll(sql: string, params: SqlValue[] = []): Record<string, SqlValue>[] {
@@ -1022,6 +1037,15 @@ export function upsertContactosWaBatch(contacts: Array<{ jid: string; nombre: st
 
 export function getContactoNombre(jid: string): string | null {
   return (getOne('SELECT nombre FROM contactos_wa WHERE jid = ?', [jid])?.nombre as string) ?? null
+}
+
+export function getContactosWaNombres(): Record<string, string> {
+  const rows = getAll('SELECT jid, nombre FROM contactos_wa')
+  const result: Record<string, string> = {}
+  for (const r of rows) {
+    if (r.jid && r.nombre) result[r.jid as string] = r.nombre as string
+  }
+  return result
 }
 
 export function limpiarConversacionesAntiguas(horasMax = 8) {

@@ -31,7 +31,7 @@ No hay tests automatizados. La verificación es `tsc --noEmit` en ambas configs.
 
 ## Arquitectura
 
-**Stack**: Electron 29 (Node.js 20) · React 18 · TypeScript · Vite · Tailwind · Zustand · sql.js · Baileys v7 · v1.4.3
+**Stack**: Electron 29 (Node.js 20) · React 18 · TypeScript · Vite · Tailwind · Zustand · sql.js · Baileys v7 · v1.4.6
 
 App de escritorio para call centers de transporte interprovincial en Ecuador. Gestiona viajes, choferes, turnos, pagos mensuales, y tiene bot automático de WhatsApp y Facebook Messenger.
 
@@ -93,7 +93,9 @@ El `import type` estático sí funciona porque no genera código en runtime.
 - Cerrar sin logout: `sock.end(undefined)`. Logout del usuario: `await sock.logout()` + borrar `wa-session/`.
 - La sesión persiste en `AppData/wa-session/` via `useMultiFileAuthState`.
 - Al conectar, carga historial via `messaging-history.set` y grupos via `groupFetchAllParticipating()`.
-- Nombres de contactos se persisten en tabla `contactos_wa` (JID → nombre). Fuentes: `contacts.upsert`, `contacts.update`, `messaging-history.set` (campo `contacts`), y `pushName` de mensajes entrantes. `getContactoNombre(jid)` → fallback cuando `pushName` no está disponible.
+- Nombres de contactos se persisten en tabla `contactos_wa` (JID → nombre). Fuentes: `contacts.upsert`, `contacts.update`, `messaging-history.set` (campo `contacts`), y `pushName` de mensajes entrantes. `getContactoNombre(jid)` → fallback cuando `pushName` no está disponible. **CRÍTICO**: usar `c.phoneNumber || c.id` como clave de almacenamiento — `c.id` puede ser formato LID (`@lid`) que no coincide con JIDs de mensajes (`@s.whatsapp.net`).
+- Mensajes multimedia (imagen, audio, video, documento, sticker) se guardan en DB con texto descriptivo emoji (ej. `📷 Imagen`, `🎤 Nota de voz`). Las imágenes de verificación de cliente se procesan aparte y no se muestran en el chat. `getContactosWaNombres()` devuelve todos los contactos como `Record<string, string>` para override en el renderer.
+- Preload.ts usa patrón singleton para listeners WA: `ipcRenderer.on` se registra una sola vez al cargar el preload; los callbacks son variables reemplazables (no se agregan nuevos listeners en cada montaje de Chat).
 - Al reconectar (`connection === 'open'`), se llama `limpiarConversacionesAntiguas(8)` para resetear conversaciones del bot atascadas más de 8 horas — evita que clientes verificados sean tratados como nuevos.
 - Fotos de verificación de clientes: `AppData/verificaciones/`.
 

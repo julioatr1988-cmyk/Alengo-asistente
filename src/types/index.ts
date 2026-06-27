@@ -369,6 +369,9 @@ declare global {
         installUpdate:      () => Promise<void>
         removeListeners:    () => void
       }
+      contactos: {
+        getNombres: () => Promise<Record<string, string>>
+      }
     }
   }
 }

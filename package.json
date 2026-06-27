@@ -1,6 +1,6 @@
 {
   "name": "alengo-asistente",
-  "version": "1.4.3",
+  "version": "1.4.6",
   "description": "Alengo Asistente Virtual - Sistema para call centers de transporte interprovincial",
   "main": "dist-electron/main.js",
   "scripts": {

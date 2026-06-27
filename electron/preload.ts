@@ -1,5 +1,25 @@
 import { contextBridge, ipcRenderer } from 'electron'
 
+// Singletons para eventos WA — se registran una sola vez al cargar el preload.
+// En lugar de agregar/quitar listeners de ipcRenderer en cada montaje/desmontaje del
+// componente Chat, guardamos el callback actual en estas variables. Esto evita que
+// navegar a otra página deje el canal sin listener y acumule duplicados.
+let _waMsgCb:    ((msg: unknown)    => void) | null = null
+let _waHistCb:   ((convs: unknown)  => void) | null = null
+let _waQrCb:     ((qr: string)      => void) | null = null
+let _waConnCb:   ((d: unknown)      => void) | null = null
+let _waStatusCb: ((s: unknown)      => void) | null = null
+let _waErrCb:    ((e: string)       => void) | null = null
+let _waGruposCb: ((g: unknown)      => void) | null = null
+
+ipcRenderer.on('whatsapp:message',       (_e, msg)   => _waMsgCb?.(msg))
+ipcRenderer.on('whatsapp:historial',     (_e, convs) => _waHistCb?.(convs))
+ipcRenderer.on('whatsapp:qr',           (_e, qr)    => _waQrCb?.(qr))
+ipcRenderer.on('whatsapp:connected',    (_e, d)     => _waConnCb?.(d))
+ipcRenderer.on('whatsapp:statusChange', (_e, s)     => _waStatusCb?.(s))
+ipcRenderer.on('whatsapp:error',        (_e, e)     => _waErrCb?.(e))
+ipcRenderer.on('whatsapp:grupos',       (_e, g)     => _waGruposCb?.(g))
+
 contextBridge.exposeInMainWorld('electronAPI', {
   // Ventana
   window: {
@@ -115,23 +135,23 @@ contextBridge.exposeInMainWorld('electronAPI', {
     sendMessage: (jid: string, text: string, contacto?: string, telefono?: string) =>
       ipcRenderer.invoke('whatsapp:sendMessage', jid, text, contacto, telefono),
     disconnect:  () => ipcRenderer.invoke('whatsapp:disconnect'),
-    onQR:        (cb: (qr: string) => void)            => ipcRenderer.on('whatsapp:qr',          (_e, qr)  => cb(qr)),
-    onConnected: (cb: (data: unknown) => void)          => ipcRenderer.on('whatsapp:connected',    (_e, d)   => cb(d)),
-    onStatus:    (cb: (s: unknown) => void)             => ipcRenderer.on('whatsapp:statusChange', (_e, s)   => cb(s)),
-    onMessage:   (cb: (msg: unknown) => void)           => ipcRenderer.on('whatsapp:message',      (_e, msg) => cb(msg)),
-    onError:     (cb: (err: string) => void)            => ipcRenderer.on('whatsapp:error',        (_e, err) => cb(err)),
-    onHistorial: (cb: (convs: unknown) => void)        => ipcRenderer.on('whatsapp:historial',    (_e, convs) => cb(convs)),
-    onGrupos:    (cb: (grupos: unknown) => void)       => ipcRenderer.on('whatsapp:grupos',       (_e, grupos) => cb(grupos)),
+    onQR:        (cb: (qr: string)      => void) => { _waQrCb = cb },
+    onConnected: (cb: (data: unknown)   => void) => { _waConnCb = cb },
+    onStatus:    (cb: (s: unknown)      => void) => { _waStatusCb = cb },
+    onMessage:   (cb: (msg: unknown)    => void) => { _waMsgCb = cb },
+    onError:     (cb: (err: string)     => void) => { _waErrCb = cb },
+    onHistorial: (cb: (convs: unknown)  => void) => { _waHistCb = cb },
+    onGrupos:    (cb: (grupos: unknown) => void) => { _waGruposCb = cb },
     getGroups:   () => ipcRenderer.invoke('whatsapp:getGroups'),
     removeListeners: () => {
-      ipcRenderer.removeAllListeners('whatsapp:qr')
-      ipcRenderer.removeAllListeners('whatsapp:connected')
-      ipcRenderer.removeAllListeners('whatsapp:statusChange')
-      ipcRenderer.removeAllListeners('whatsapp:message')
-      ipcRenderer.removeAllListeners('whatsapp:error')
-      ipcRenderer.removeAllListeners('whatsapp:historial')
-      ipcRenderer.removeAllListeners('whatsapp:grupos')
+      _waMsgCb = null; _waHistCb = null; _waQrCb = null
+      _waConnCb = null; _waStatusCb = null; _waErrCb = null; _waGruposCb = null
     },
+  },
+
+  // Contactos WA
+  contactos: {
+    getNombres: () => ipcRenderer.invoke('contactos:getNombres'),
   },
 
   // Messenger

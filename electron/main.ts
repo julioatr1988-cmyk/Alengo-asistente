@@ -24,7 +24,8 @@ import {
   getTarifasZonas, upsertTarifaZona, getTarifasEncTamanos, upsertTarifaEncTamano,
   getViajeGrupos, getViajesByGrupo, updateViajeGrupoEstado, createViajeConGrupo,
   saveEdicionTurnos,
-  upsertContactoWa, upsertContactosWaBatch, getContactoNombre, limpiarConversacionesAntiguas,
+  upsertContactoWa, upsertContactosWaBatch, getContactoNombre, getContactosWaNombres, limpiarConversacionesAntiguas,
+  flushDB,
 } from './database'
 import { procesarMensaje, type SendFn } from './bot'
 import {
@@ -107,6 +108,8 @@ async function iniciarWhatsApp(win: BrowserWindow) {
       useMultiFileAuthState,
       DisconnectReason,
       isJidGroup,
+      isLidUser,
+      jidNormalizedUser,
       downloadMediaMessage,
       fetchLatestBaileysVersion,
     } = await esmImport('@whiskeysockets/baileys')
@@ -151,7 +154,11 @@ async function iniciarWhatsApp(win: BrowserWindow) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       for (const c of contactsArr as any[]) {
         const nombre = (c.name || c.notify) as string | undefined
-        if (c.id && nombre) batch.push({ jid: c.id as string, nombre })
+        if (!nombre) continue
+        // Guardar bajo phoneNumber (@s.whatsapp.net) y también bajo id (@lid si aplica).
+        // Así el lookup funciona tanto si el mensaje llega por JID como por LID.
+        if (c.phoneNumber) batch.push({ jid: c.phoneNumber as string, nombre })
+        if (c.id && c.id !== c.phoneNumber) batch.push({ jid: c.id as string, nombre })
       }
       if (batch.length) upsertContactosWaBatch(batch)
     })
@@ -161,7 +168,9 @@ async function iniciarWhatsApp(win: BrowserWindow) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       for (const u of updates as any[]) {
         const nombre = (u.name || u.notify) as string | undefined
-        if (u.id && nombre) upsertContactoWa(u.id as string, nombre)
+        if (!nombre) continue
+        if (u.phoneNumber) upsertContactoWa(u.phoneNumber as string, nombre)
+        if (u.id && u.id !== u.phoneNumber) upsertContactoWa(u.id as string, nombre)
       }
     })
 
@@ -262,7 +271,9 @@ async function iniciarWhatsApp(win: BrowserWindow) {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         for (const c of (contacts ?? []) as any[]) {
           const nombre = (c.name || c.notify) as string | undefined
-          if (c.id && nombre) contactsBatch.push({ jid: c.id as string, nombre })
+          if (!nombre) continue
+          if (c.phoneNumber) contactsBatch.push({ jid: c.phoneNumber as string, nombre })
+          if (c.id && c.id !== c.phoneNumber) contactsBatch.push({ jid: c.id as string, nombre })
         }
         if (contactsBatch.length) upsertContactosWaBatch(contactsBatch)
 
@@ -319,16 +330,31 @@ async function iniciarWhatsApp(win: BrowserWindow) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       for (const msg of messages as any[]) {
         if (msg.key.fromMe) continue
-        const jid = msg.key.remoteJid
-        if (!jid) continue
+        const rawJid = msg.key.remoteJid
+        if (!rawJid) continue
 
-        const esGrupo  = isJidGroup(jid)
-        const phone    = jid.split('@')[0]
+        // Normalizar: elimina sufijo de dispositivo (:5) y convierte c.us → s.whatsapp.net
+        let jid = jidNormalizedUser(rawJid) || rawJid
+
+        // Resolución LID → PN: si el JID viene en formato @lid, buscar el número real
+        // (@s.whatsapp.net) en el store interno de Baileys. Esto ocurre cuando WhatsApp
+        // envía el mensaje referenciando el Linked ID en lugar del número de teléfono.
+        if (isLidUser(jid)) {
+          try {
+            const pn = await sock.signalRepository.lidMapping.getPNForLID(jid)
+            if (pn) jid = jidNormalizedUser(pn) || pn
+          } catch { /* lidMapping puede no tener el mapeo aún — usar el LID como fallback */ }
+        }
+
+        const esGrupo = isJidGroup(jid)
+        const phone   = jid.split('@')[0]
         const storedName = esGrupo ? null : getContactoNombre(jid)
-        const pushName = msg.pushName || storedName || phone
+        const pushName   = storedName || (msg.pushName as string | undefined) || phone
 
-        // Persist pushName so the name survives reconnects
-        if (!esGrupo && msg.pushName && msg.pushName !== phone) {
+        // pushName es auto-reportado por el remitente y puede ser engañoso.
+        // Solo persiste como fallback si NO hay ya un nombre guardado — así los nombres
+        // del directorio telefónico (de contacts.upsert, campo c.name) no se sobrescriben.
+        if (!esGrupo && msg.pushName && msg.pushName !== phone && !storedName) {
           upsertContactoWa(jid, msg.pushName as string)
         }
 
@@ -345,41 +371,80 @@ async function iniciarWhatsApp(win: BrowserWindow) {
               tipo: 'entrante' as const, procesado: 0, jid, canal: 'whatsapp',
               wa_numero: waPhone,
             }
-            saveMensaje(locObj)
             win.webContents.send('whatsapp:message', locObj)
+            saveMensaje(locObj)
           }
           continue
         }
 
-        // Foto de verificación de cliente
+        // Foto de verificación de cliente / imagen genérica
         const imgMsg = msg.message?.imageMessage
-        if (imgMsg && !esGrupo) {
-          const conv = getBotConversation(jid)
-          if (conv?.estado === 'pedir_verificacion') {
-            try {
-              const buffer = await downloadMediaMessage(msg, 'buffer', {})
-              if (buffer) {
-                const verDir = path.join(app.getPath('userData'), 'verificaciones')
-                if (!fs.existsSync(verDir)) fs.mkdirSync(verDir, { recursive: true })
-                const normalizedPhone = normalizePhone(phone)
-                const fotoPath = path.join(verDir, `${normalizedPhone}_${Date.now()}.jpg`)
-                fs.writeFileSync(fotoPath, buffer as Buffer)
-                updateClienteVerificado(normalizedPhone, fotoPath)
-                deleteBotConversation(jid)
-                if (waSocket && waConnected) {
-                  await waSocket.sendMessage(jid, { text: '¡Gracias! Su identidad ha sido verificada correctamente. Ahora puede hacer reservas. Escriba *HOLA* para comenzar.' })
+        if (imgMsg) {
+          if (!esGrupo) {
+            const conv = getBotConversation(jid)
+            if (conv?.estado === 'pedir_verificacion') {
+              try {
+                const buffer = await downloadMediaMessage(msg, 'buffer', {})
+                if (buffer) {
+                  const verDir = path.join(app.getPath('userData'), 'verificaciones')
+                  if (!fs.existsSync(verDir)) fs.mkdirSync(verDir, { recursive: true })
+                  const normalizedPhone = normalizePhone(phone)
+                  const fotoPath = path.join(verDir, `${normalizedPhone}_${Date.now()}.jpg`)
+                  fs.writeFileSync(fotoPath, buffer as Buffer)
+                  updateClienteVerificado(normalizedPhone, fotoPath)
+                  deleteBotConversation(jid)
+                  if (waSocket && waConnected) {
+                    await waSocket.sendMessage(jid, { text: '¡Gracias! Su identidad ha sido verificada correctamente. Ahora puede hacer reservas. Escriba *HOLA* para comenzar.' })
+                  }
+                  win.webContents.send('clientes:updated')
                 }
-                win.webContents.send('clientes:updated')
+              } catch (e) {
+                console.error('[WA] Error guardando foto verificación:', e)
               }
-            } catch (e) {
-              console.error('[WA] Error guardando foto verificación:', e)
+              continue
             }
           }
+          // Imagen no-verificación: registrar en chat como indicador
+          const imgCaption = (imgMsg as any).caption as string | undefined
+          const imgObj = {
+            id: Date.now(), contacto: pushName, telefono: phone,
+            mensaje: esGrupo
+              ? `[${pushName}]: 📷 Imagen${imgCaption ? ': ' + imgCaption : ''}`
+              : `📷 Imagen${imgCaption ? ': ' + imgCaption : ''}`,
+            fecha: new Date().toISOString(), tipo: 'entrante' as const,
+            procesado: 0, jid, canal: 'whatsapp', wa_numero: waPhone,
+          }
+          win.webContents.send('whatsapp:message', imgObj)
+          saveMensaje(imgObj)
           continue
         }
 
         const text = msg.message?.conversation ?? msg.message?.extendedTextMessage?.text ?? ''
-        if (!text) continue
+        if (!text) {
+          // Mensajes multimedia no-imagen: mostrar indicador en el chat
+          const mc = msg.message
+          if (mc) {
+            let mediaTexto: string | null = null
+            if ((mc as any).videoMessage)    mediaTexto = '🎥 Video'
+            else if ((mc as any).audioMessage)  mediaTexto = (mc as any).audioMessage?.ptt ? '🎤 Nota de voz' : '🎵 Audio'
+            else if ((mc as any).documentMessage) {
+              const fname = (mc as any).documentMessage?.fileName as string | undefined
+              mediaTexto = fname ? `📄 Documento: ${fname}` : '📄 Documento'
+            }
+            else if ((mc as any).stickerMessage) mediaTexto = '😄 Sticker'
+            if (mediaTexto) {
+              const mediaObj = {
+                id: Date.now(), contacto: pushName, telefono: phone,
+                mensaje: esGrupo ? `[${pushName}]: ${mediaTexto}` : mediaTexto,
+                fecha: new Date().toISOString(), tipo: 'entrante' as const,
+                procesado: 0, jid, canal: 'whatsapp', wa_numero: waPhone,
+              }
+              win.webContents.send('whatsapp:message', mediaObj)
+              saveMensaje(mediaObj)
+            }
+          }
+          continue
+        }
 
         const mensajeObj = {
           id: Date.now(),
@@ -389,8 +454,8 @@ async function iniciarWhatsApp(win: BrowserWindow) {
           fecha: new Date().toISOString(), tipo: 'entrante' as const,
           procesado: 0, jid, canal: 'whatsapp', wa_numero: waPhone,
         }
-        saveMensaje(mensajeObj)
         win.webContents.send('whatsapp:message', mensajeObj)
+        saveMensaje(mensajeObj)
 
         if (!esGrupo && getBotModo() === 'auto') {
           await procesarMensaje(jid, 'whatsapp', text, pushName,
@@ -577,6 +642,7 @@ app.on('window-all-closed', () => {
 })
 
 app.on('before-quit', () => {
+  flushDB()
   if (waSocket) {
     const ws = waSocket
     waSocket = null
@@ -983,6 +1049,9 @@ ipcMain.handle('bot:resetTest', () => {
 // ── Mensajes ──────────────────────────────────────────────────────────────────
 ipcMain.handle('mensajes:getAll', () => getMensajes(waPhone))
 ipcMain.handle('mensajes:save', (_e, data) => { saveMensaje({ ...data, wa_numero: waPhone }); return { success: true } })
+
+// ── Contactos WA ───────────────────────────────────────────────────────────────
+ipcMain.handle('contactos:getNombres', () => getContactosWaNombres())
 
 // ── Rutas Config ──────────────────────────────────────────────────────────────
 ipcMain.handle('rutasConfig:get', () => getRutasConfig())
