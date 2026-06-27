@@ -31,7 +31,7 @@ No hay tests automatizados. La verificación es `tsc --noEmit` en ambas configs.
 
 ## Arquitectura
 
-**Stack**: Electron 29 (Node.js 20) · React 18 · TypeScript · Vite · Tailwind · Zustand · sql.js · Baileys v7 · v1.4.6
+**Stack**: Electron 29 (Node.js 20) · React 18 · TypeScript · Vite · Tailwind · Zustand · sql.js · Baileys v7 · v1.4.7
 
 App de escritorio para call centers de transporte interprovincial en Ecuador. Gestiona viajes, choferes, turnos, pagos mensuales, y tiene bot automático de WhatsApp y Facebook Messenger.
 

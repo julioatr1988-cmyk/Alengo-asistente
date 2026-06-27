@@ -248,7 +248,11 @@ async function iniciarWhatsApp(win: BrowserWindow) {
             }
           }, 3000)
         } else if (!shouldReconnect) {
-          console.log('[WA] Sesión cerrada (logout)')
+          console.log('[WA] Sesión cerrada (logout) — borrando credenciales para habilitar nuevo QR')
+          // Borrar carpeta de sesión: con credenciales viejas Baileys nunca emite 'qr'
+          // porque state.creds.registered sigue siendo true. Sin esta limpieza el usuario
+          // queda atrapado en un loop de loggedOut sin poder reconectar sin intervención manual.
+          if (fs.existsSync(sessionDir)) fs.rmSync(sessionDir, { recursive: true, force: true })
           win.webContents.send('whatsapp:error', 'Sesión cerrada. Reconecta y escanea el QR nuevamente.')
         }
       }
