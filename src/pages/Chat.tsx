@@ -308,12 +308,24 @@ export function Chat() {
         conv.contacto = nombreCandidato
       }
     }
-    // Aplicar nombres almacenados en contactos_wa como override final (más confiables)
+    // Aplicar nombres almacenados en contactos_wa como override (directorio del teléfono)
     if (window.electronAPI?.contactos) {
       try {
         const storedNames = await window.electronAPI.contactos.getNombres()
         for (const [jid, conv] of mapa) {
           if (storedNames[jid]) conv.contacto = storedNames[jid]
+        }
+      } catch { /* no bloquear si falla */ }
+    }
+    // Aplicar nombres de clientes como prioridad más alta: nombre verificado por el operador
+    // (importado por Excel/PDF) tiene precedencia sobre pushName y contactos_wa.
+    if (window.electronAPI?.clientes?.getNombres) {
+      try {
+        const clienteNames = await window.electronAPI.clientes.getNombres()
+        for (const [, conv] of mapa) {
+          // conv.telefono = "593XXXXXXXXX"; clientes.telefono = "XXXXXXXXX" (sin código país)
+          const phoneNorm = conv.telefono.replace(/^593/, '').replace(/^0+/, '')
+          if (clienteNames[phoneNorm]) conv.contacto = clienteNames[phoneNorm]
         }
       } catch { /* no bloquear si falla */ }
     }

@@ -19,12 +19,14 @@ import {
   getMensajes, getRutasConfig, upsertRutaConfig,
   getViajeGruposParaAutocompletar,
   getCliente, createCliente, updateClienteVerificado, getClientes,
+  createClienteManual, upsertClientesBatch,
   getFAQ, createFAQ, updateFAQ, deleteFAQ,
   getTarifasEncomiendas, upsertTarifaEncomienda,
   getTarifasZonas, upsertTarifaZona, getTarifasEncTamanos, upsertTarifaEncTamano,
   getViajeGrupos, getViajesByGrupo, updateViajeGrupoEstado, createViajeConGrupo,
   saveEdicionTurnos,
   upsertContactoWa, upsertContactosWaBatch, getContactoNombre, getContactosWaNombres, limpiarConversacionesAntiguas,
+  upsertClienteFromWA, getClientesNombres,
   flushDB,
 } from './database'
 import { procesarMensaje, type SendFn } from './bot'
@@ -360,6 +362,14 @@ async function iniciarWhatsApp(win: BrowserWindow) {
         // del directorio telefónico (de contacts.upsert, campo c.name) no se sobrescriben.
         if (!esGrupo && msg.pushName && msg.pushName !== phone && !storedName) {
           upsertContactoWa(jid, msg.pushName as string)
+        }
+
+        // Alta automática en clientes: cualquier mensaje entrante de un número individual
+        // registra al contacto con origen='whatsapp'. Si ya existe con nombre=NULL,
+        // se rellena con el mejor nombre disponible (storedName > pushName).
+        if (!esGrupo) {
+          const clienteNombre = pushName !== phone ? pushName : null
+          upsertClienteFromWA(normalizePhone(phone), clienteNombre)
         }
 
         // Mensaje de ubicación GPS
@@ -1067,6 +1077,67 @@ ipcMain.handle('rutasConfig:update', (_e, rutaId: number, precio: number, horari
 // ── Clientes ──────────────────────────────────────────────────────────────────
 ipcMain.handle('clientes:get', () => getClientes())
 ipcMain.handle('clientes:getByTelefono', (_e, telefono: string) => getCliente(telefono))
+ipcMain.handle('clientes:create', (_e, data: { telefono: string; nombre: string }) => {
+  const cliente = createClienteManual(data)
+  mainWindow?.webContents.send('clientes:updated')
+  return cliente
+})
+ipcMain.handle('clientes:importarBatch', (_e, rows: Array<{ telefono: string; nombre: string; origen: string }>) => {
+  upsertClientesBatch(rows)
+  mainWindow?.webContents.send('clientes:updated')
+  return { success: true, count: rows.length }
+})
+
+ipcMain.handle('clientes:getNombres', () => getClientesNombres())
+
+ipcMain.handle('clientes:extractContactsFromDoc', async (_e, filePath: string, ext: string, filename: string) => {
+  const lic = getLicencia()
+  if (!lic) return { success: false, error: 'Esta función requiere una licencia activa. Ve a Configuración para activarla.', error_code: 'no_license' }
+
+  let text = ''
+  try {
+    if (ext === 'docx') {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const mammoth = require('mammoth') as typeof import('mammoth')
+      const result = await mammoth.extractRawText({ buffer: fs.readFileSync(filePath) })
+      text = result.value
+    } else if (ext === 'pdf') {
+      // pdfjs-dist v3 (CJS): no requiere worker para extracción de texto
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const pdfjsLib = require('pdfjs-dist/legacy/build/pdf.js') as Record<string, unknown>
+      const opts = pdfjsLib.GlobalWorkerOptions as Record<string, unknown>
+      if (opts) opts.workerSrc = false
+      type PdfDoc = { numPages: number; getPage: (n: number) => Promise<{ getTextContent: () => Promise<{ items: Array<{ str?: string }> }> }> }
+      const pdfDoc = await (pdfjsLib.getDocument as (o: object) => { promise: Promise<PdfDoc> })(
+        { data: new Uint8Array(fs.readFileSync(filePath)), useSystemFonts: true, disableFontFace: true }
+      ).promise
+      const parts: string[] = []
+      for (let i = 1; i <= pdfDoc.numPages; i++) {
+        const page = await pdfDoc.getPage(i)
+        const content = await page.getTextContent()
+        parts.push(content.items.map(item => item.str ?? '').join(' '))
+      }
+      text = parts.join('\n')
+    }
+  } catch (err) {
+    return { success: false, error: `Error al leer el archivo: ${String(err)}` }
+  }
+
+  if (!text.trim()) {
+    return { success: false, error: 'El documento no contiene texto legible (puede ser un escaneado o imagen).' }
+  }
+
+  const fingerprint = getFingerprint()
+  try {
+    const data = await licenseRequest('/ai/extract-contacts', {
+      method: 'POST',
+      body: JSON.stringify({ key: lic.clave, fingerprint, text, filename }),
+    })
+    return data
+  } catch {
+    return { success: false, error: 'No se pudo conectar al servidor. Verifica tu conexión a internet.', error_code: 'offline' }
+  }
+})
 
 // ── Preguntas Frecuentes ──────────────────────────────────────────────────────
 ipcMain.handle('faq:get', () => getFAQ())

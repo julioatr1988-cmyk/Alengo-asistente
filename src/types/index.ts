@@ -73,6 +73,15 @@ export interface Cliente {
   verificado: number
   foto_verificacion: string | null
   fecha_registro: string
+  origen?: string | null
+  actualizado_en?: string | null
+}
+
+export interface ClienteImportRow {
+  telefono: string
+  nombre: string
+  existe: boolean
+  nombreActual: string | null
 }
 
 export interface FAQ {
@@ -287,9 +296,18 @@ declare global {
         removeListeners: () => void
       }
       clientes: {
-        get:           () => Promise<Cliente[]>
-        getByTelefono: (tel: string) => Promise<Cliente | null>
-        onUpdated:     (cb: () => void) => void
+        get:                    () => Promise<Cliente[]>
+        getByTelefono:          (tel: string) => Promise<Cliente | null>
+        create:                 (data: { telefono: string; nombre: string }) => Promise<Cliente>
+        importarBatch:          (rows: Array<{ telefono: string; nombre: string; origen: string }>) => Promise<{ success: boolean; count: number }>
+        extractContactsFromDoc: (filePath: string, ext: string, filename: string) => Promise<{
+          success: boolean
+          contacts?: Array<{ nombre: string; telefono: string }>
+          error?: string
+          error_code?: string
+        }>
+        getNombres:             () => Promise<Record<string, string>>
+        onUpdated:              (cb: () => void) => void
       }
       tarifasEncomiendas: {
         get:    () => Promise<TarifaEncomienda[]>

@@ -253,6 +253,8 @@ function createTables() {
       precio REAL NOT NULL DEFAULT 0,
       activo INTEGER NOT NULL DEFAULT 1
     )`,
+    "ALTER TABLE clientes ADD COLUMN origen TEXT DEFAULT 'whatsapp'",
+    'ALTER TABLE clientes ADD COLUMN actualizado_en TEXT',
   ]
   for (const sql of migrations) {
     try { db.run(sql) } catch { /* columna ya existe */ }
@@ -735,6 +737,47 @@ export function updateClienteVerificado(telefono: string, fotoPath: string) {
 
 export function getClientes() {
   return getAll('SELECT * FROM clientes ORDER BY fecha_registro DESC')
+}
+
+export function createClienteManual(data: { telefono: string; nombre: string }) {
+  runSQL(
+    `INSERT INTO clientes (telefono, nombre, origen, actualizado_en)
+     VALUES (?, ?, 'manual', datetime('now','localtime'))
+     ON CONFLICT(telefono) DO UPDATE SET nombre=excluded.nombre, origen='manual', actualizado_en=datetime('now','localtime')`,
+    p(data.telefono, data.nombre)
+  )
+  return getCliente(data.telefono)
+}
+
+export function upsertClientesBatch(rows: Array<{ telefono: string; nombre: string; origen: string }>) {
+  for (const row of rows) {
+    try {
+      db.run(
+        `INSERT INTO clientes (telefono, nombre, origen, actualizado_en)
+         VALUES (?, ?, ?, datetime('now','localtime'))
+         ON CONFLICT(telefono) DO UPDATE SET nombre=excluded.nombre, origen=excluded.origen, actualizado_en=excluded.actualizado_en`,
+        p(row.telefono, row.nombre, row.origen)
+      )
+    } catch { /* ignore */ }
+  }
+  saveDB()
+}
+
+export function upsertClienteFromWA(telefono: string, nombre: string | null) {
+  runSQL(
+    `INSERT INTO clientes (telefono, nombre, origen, actualizado_en)
+     VALUES (?, ?, 'whatsapp', datetime('now','localtime'))
+     ON CONFLICT(telefono) DO UPDATE SET
+       nombre = CASE WHEN clientes.nombre IS NULL AND excluded.nombre IS NOT NULL THEN excluded.nombre ELSE clientes.nombre END`,
+    p(telefono, nombre)
+  )
+}
+
+export function getClientesNombres(): Record<string, string> {
+  const rows = getAll("SELECT telefono, nombre FROM clientes WHERE nombre IS NOT NULL AND nombre != ''")
+  const result: Record<string, string> = {}
+  for (const row of rows) result[row.telefono as string] = row.nombre as string
+  return result
 }
 
 // ── Logo empresa ──────────────────────────────────────────────────────────────

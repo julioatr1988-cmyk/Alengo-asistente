@@ -2,7 +2,7 @@ import { NavLink } from 'react-router-dom'
 import { useState, useEffect } from 'react'
 import {
   LayoutDashboard, MessageSquare, CalendarDays,
-  Users, BarChart3, CreditCard, Settings, Bus
+  Users, BarChart3, CreditCard, Settings, Bus, BookUser
 } from 'lucide-react'
 import { useAppStore } from '../store/useAppStore'
 
@@ -13,6 +13,7 @@ const NAV = [
   { to: '/choferes', icon: Users, label: 'Choferes' },
   { to: '/reportes', icon: BarChart3, label: 'Reportes' },
   { to: '/cobros', icon: CreditCard, label: 'Cobros' },
+  { to: '/clientes', icon: BookUser, label: 'Clientes' },
   { to: '/configuracion', icon: Settings, label: 'Configuración' },
 ]
 

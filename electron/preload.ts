@@ -108,9 +108,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // Clientes
   clientes: {
-    get:          () => ipcRenderer.invoke('clientes:get'),
+    get:           () => ipcRenderer.invoke('clientes:get'),
     getByTelefono: (tel: string) => ipcRenderer.invoke('clientes:getByTelefono', tel),
-    onUpdated:    (cb: () => void) => ipcRenderer.on('clientes:updated', () => cb()),
+    create:        (data: unknown) => ipcRenderer.invoke('clientes:create', data),
+    importarBatch:           (rows: unknown[]) => ipcRenderer.invoke('clientes:importarBatch', rows),
+    extractContactsFromDoc:  (filePath: string, ext: string, filename: string) =>
+      ipcRenderer.invoke('clientes:extractContactsFromDoc', filePath, ext, filename),
+    getNombres:    () => ipcRenderer.invoke('clientes:getNombres'),
+    onUpdated:     (cb: () => void) => ipcRenderer.on('clientes:updated', () => cb()),
   },
 
   // Tarifas Encomiendas

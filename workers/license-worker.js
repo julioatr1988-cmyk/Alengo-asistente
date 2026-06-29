@@ -7,6 +7,7 @@
  * GET  /                                             → panel admin HTML
  * GET  /validate?key=ALENGO-XXXX&fingerprint=HEX    → validar (público)
  * POST /activate     { key, fingerprint }            → activar (público)
+ * POST /ai/extract-contacts { key, fingerprint, text, filename } → extraer contactos con IA (requiere ANTHROPIC_API_KEY)
  * POST /admin/create { empresa, email, plan }        → crear licencia
  * GET  /admin/list                                   → listar licencias
  * POST /admin/toggle  { key }                        → activar/desactivar
@@ -491,6 +492,90 @@ export default {
         plan: lic.plan ?? '1y',
         fecha_vencimiento: lic.fecha_vencimiento,
       })
+    }
+
+    // ── POST /ai/extract-contacts — extrae contactos de un documento con IA ─────
+    // Requiere ANTHROPIC_API_KEY como wrangler secret.
+    if (url.pathname === '/ai/extract-contacts' && request.method === 'POST') {
+      let body
+      try { body = await request.json() } catch { return json({ success: false, error: 'JSON inválido' }, 400) }
+
+      const { key, fingerprint, text, filename } = body
+      if (!key || !text) return json({ success: false, error: 'Faltan parámetros: key, text' }, 400)
+
+      const licKey = String(key).trim().toUpperCase()
+      const lic = await env.LICENSES.get(licKey, { type: 'json' })
+      if (!lic || !lic.activo)
+        return json({ success: false, error: 'Licencia inválida o desactivada', error_code: 'invalid_license' }, 401)
+      if (lic.fecha_vencimiento < today())
+        return json({ success: false, error: 'La licencia ha vencido', error_code: 'expired' }, 401)
+      if (fingerprint && lic.fingerprint_pc && lic.fingerprint_pc !== String(fingerprint))
+        return json({ success: false, error: 'Licencia activada en otro equipo', error_code: 'pc_mismatch' }, 401)
+
+      const MONTHLY_LIMIT = 50
+      const monthKey = `usage:${licKey}:${today().slice(0, 7)}`
+      const usageRaw = await env.LICENSES.get(monthKey)
+      const usage = usageRaw ? parseInt(usageRaw, 10) : 0
+      if (usage >= MONTHLY_LIMIT) {
+        return json({
+          success: false,
+          error_code: 'rate_limited',
+          error: `Límite mensual de ${MONTHLY_LIMIT} extracciones de documentos alcanzado. Se reinicia el 1ro del próximo mes.`,
+        }, 429)
+      }
+
+      if (!env.ANTHROPIC_API_KEY) {
+        return json({ success: false, error: 'Servicio de IA no configurado en el servidor' }, 503)
+      }
+
+      const truncatedText = String(text).slice(0, 8000)
+      const safeFilename = String(filename || 'documento').replace(/"/g, '')
+      const prompt = `Extrae TODOS los contactos (nombre y número de teléfono) del siguiente texto.\nDevuelve ÚNICAMENTE un JSON array con objetos {"nombre": string, "telefono": string}.\nReglas:\n- "telefono" debe contener solo dígitos (sin +, espacios ni guiones).\n- Si hay duplicados de teléfono, incluye solo el primero.\n- Si el texto no contiene contactos, devuelve [].\n- No incluyas texto ni explicaciones fuera del JSON array.\n\nTexto del archivo "${safeFilename}":\n${truncatedText}`
+
+      try {
+        const anthropicAuthHeader = String(env.ANTHROPIC_API_KEY).startsWith('sk-ant-oat')
+          ? { 'Authorization': `Bearer ${env.ANTHROPIC_API_KEY}` }
+          : { 'x-api-key': env.ANTHROPIC_API_KEY }
+        const aiRes = await fetch('https://api.anthropic.com/v1/messages', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...anthropicAuthHeader,
+            'anthropic-version': '2023-06-01',
+          },
+          body: JSON.stringify({
+            model: 'claude-haiku-4-5-20251001',
+            max_tokens: 2048,
+            messages: [{ role: 'user', content: prompt }],
+          }),
+        })
+
+        if (!aiRes.ok) {
+          return json({ success: false, error: 'Error en el servicio de IA. Intenta de nuevo.' }, 500)
+        }
+
+        const aiData = await aiRes.json()
+        const rawContent = aiData.content?.[0]?.text || '[]'
+
+        let contacts = []
+        try {
+          contacts = JSON.parse(rawContent.trim())
+        } catch {
+          try {
+            const match = rawContent.match(/\[[\s\S]*\]/)
+            if (match) contacts = JSON.parse(match[0])
+          } catch {
+            contacts = []
+          }
+        }
+
+        // Incrementar contador de uso mensual (expira en 35 días para limpieza automática)
+        await env.LICENSES.put(monthKey, String(usage + 1), { expirationTtl: 60 * 60 * 24 * 35 })
+
+        return json({ success: true, contacts, usage: usage + 1, limit: MONTHLY_LIMIT })
+      } catch {
+        return json({ success: false, error: 'Error interno al procesar el documento.' }, 500)
+      }
     }
 
     // ── Rutas admin — requieren Authorization ──────────────────────────────────

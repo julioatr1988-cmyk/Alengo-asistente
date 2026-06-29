@@ -9,6 +9,7 @@ import { Choferes } from './pages/Choferes'
 import { Reportes } from './pages/Reportes'
 import { Cobros } from './pages/Cobros'
 import { Configuracion } from './pages/Configuracion'
+import { Clientes } from './pages/Clientes'
 import { Activacion } from './pages/Activacion'
 import { useAppStore } from './store/useAppStore'
 import type { Licencia } from './types'
@@ -118,6 +119,7 @@ export default function App() {
               <Route path="/choferes" element={<Choferes />} />
               <Route path="/reportes" element={<Reportes />} />
               <Route path="/cobros" element={<Cobros />} />
+              <Route path="/clientes" element={<Clientes />} />
               <Route path="/configuracion" element={<Configuracion />} />
             </Routes>
           </main>

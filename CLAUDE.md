@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Regla obligatoria: usar Context7 para estas librerías
 
-Antes de escribir o corregir código que involucre `@whiskeysockets/baileys`, `electron`, `electron-builder`, `electron-updater`, `sql.js`, `React` o `TypeScript`, consultar la documentación actual con Context7. Varios bugs concretos vinieron de detalles que cambiaron (error "browser is already running", rutas WASM de sql.js con Node 20, ícono del instalador).
+Antes de escribir o corregir código que involucre `@whiskeysockets/baileys`, `electron`, `electron-builder`, `electron-updater`, `sql.js`, `mammoth`, `pdfjs-dist`, `React` o `TypeScript`, consultar la documentación actual con Context7. Varios bugs concretos vinieron de detalles que cambiaron (error "browser is already running", rutas WASM de sql.js con Node 20, ícono del instalador).
 
 ## Comandos
 
@@ -31,7 +31,7 @@ No hay tests automatizados. La verificación es `tsc --noEmit` en ambas configs.
 
 ## Arquitectura
 
-**Stack**: Electron 29 (Node.js 20) · React 18 · TypeScript · Vite · Tailwind · Zustand · sql.js · Baileys v7 · v1.4.7
+**Stack**: Electron 29 (Node.js 20) · React 18 · TypeScript · Vite · Tailwind · Zustand · sql.js · Baileys v7 · v1.5.0
 
 App de escritorio para call centers de transporte interprovincial en Ecuador. Gestiona viajes, choferes, turnos, pagos mensuales, y tiene bot automático de WhatsApp y Facebook Messenger.
 
@@ -52,8 +52,8 @@ Toda comunicación renderer↔main pasa por `ipcRenderer.invoke` / `ipcMain.hand
 
 SQLite corre en WASM en memoria, persistido en `AppData/Roaming/alengo-asistente/database.sqlite`.
 
-- **`saveDB()`** escribe el DB completo a disco (síncrono). `runSQL()` la llama automáticamente. Las escrituras directas con `db.run()` dentro de loops (migraciones, seeds) no la llaman — llamar al final del bloque.
-- **Operaciones bulk**: usar `db.run()` en el loop y `saveDB()` una sola vez al final. **Nunca** llamar `runSQL()` en un loop de cientos de registros — cada llamada escribe todo el archivo al disco y congela el proceso. Ver `saveMensajeHistorialBatch()` como ejemplo del patrón correcto.
+- **Flush periódico**: `runSQL()` llama `db.run()` y activa `dbDirty = true`. Un `setInterval` de 1 500 ms escribe a disco solo si `dbDirty`. NO hay escritura síncrona por operación. `flushDB()` (llamado en `before-quit`) garantiza la escritura final.
+- **Operaciones bulk**: usar `db.run()` en el loop y `saveDB()` una sola vez al final para escritura inmediata garantizada. Ver `saveMensajeHistorialBatch()` y `upsertClientesBatch()` como ejemplos.
 - **`getAll()` / `getOne()`** para lecturas; devuelven `Record<string, SqlValue>[]`.
 - **Migraciones**: array `migrations` en `createTables()`. SQLite no tiene `ADD COLUMN IF NOT EXISTS` — usar try/catch con `/* columna ya existe */`.
 - **Seed**: `seedData()` usa `INSERT OR IGNORE` — seguro en cada arranque.
@@ -104,6 +104,14 @@ El `import type` estático sí funciona porque no genera código en runtime.
 - `waQrTimer`: si el QR se muestra y no se escanea en 2 minutos, resetea `waConnecting` y notifica al usuario. Sin esto, la app quedaría trabada sin poder reconectar.
 - `fetchLatestBaileysVersion()` tiene timeout de 8s via `Promise.race` con versión fallback — evita colgar la conexión si no hay red.
 - Reconexión automática: 3 segundos tras cierre, solo si `statusCode !== DisconnectReason.loggedOut`.
+
+**Prioridad de nombre en Chat** (aplicada en `cargarMensajesDB` en Chat.tsx):
+1. `clientes.nombre` — verificado por el operador (importación Excel/PDF/manual)
+2. `contactos_wa.nombre` — directorio telefónico del dispositivo
+3. `pushName` — auto-reportado por el remitente en el mensaje
+4. Número de teléfono como fallback
+
+**Alta automática de clientes**: cualquier mensaje entrante de un número individual (no grupo) llama `upsertClienteFromWA(normalizePhone(phone), nombre)` en main.ts antes de invocar el bot. Crea la fila con `origen='whatsapp'` si no existe; si existe con `nombre IS NULL`, rellena el nombre. Nunca pisa un nombre ya guardado.
 
 ## Bot de WhatsApp (bot.ts)
 
@@ -160,8 +168,12 @@ onCreated={() => { void loadTurnos(); void loadGrupos() }}  // correcto
 
 Cloudflare Worker en `workers/license-worker.js`. Sirve API de licencias + panel admin web.
 
-Endpoints públicos: `GET /validate?key=&fingerprint=`, `POST /activate { key, fingerprint }`.  
+Endpoints públicos: `GET /validate?key=&fingerprint=`, `POST /activate { key, fingerprint }`, `POST /ai/extract-contacts { key, fingerprint, text, filename }`.  
 Endpoints admin (Bearer `ADMIN_SECRET`): `/admin/list`, `/admin/create`, `/admin/toggle`, `/admin/renew`, `/admin/transfer`.
+
+**`/ai/extract-contacts`**: recibe texto plano (máx 8 000 chars) extraído de .docx/.pdf, llama a Claude Haiku, devuelve `{ success, contacts: [{nombre,telefono}][], usage, limit }`. Rate limit: 50 llamadas/mes/licencia, clave KV `usage:${licKey}:YYYY-MM` con TTL 35 días. Auth hacia Anthropic: detecta prefijo `sk-ant-oat` → `Authorization: Bearer`; de lo contrario → `x-api-key`.
+
+**`/admin/transfer`**: resetea `fingerprint_pc` y `activada` a null/false. Usar cuando el fingerprint de la PC cambió (ej. adaptadores de red virtuales reinstalados) y el usuario ve `pc_mismatch`. Tras el transfer, el usuario debe re-activar desde Configuración.
 
 **Trampa crítica**: el HTML del panel está en un template literal (backticks). `\'` dentro → `'` en el HTML servido, lo que rompe strings JS en `<script>`. `\n` → salto de línea real, SyntaxError en strings de una línea. Solución: atributos `data-*` para valores dinámicos; nunca strings con comilla simple que contengan datos del servidor.
 
@@ -169,7 +181,38 @@ Verificar JS del panel: `curl -s <URL>/ | sed -n '/<script>/,/<\/script>/p' | se
 
 ## Fingerprint de licencia
 
-`getFingerprint()` en main.ts: hash SHA-256 de `hostname + hasta 3 MACs` (excluyendo interfaces virtuales/VPN). Truncado a 32 chars hex. Identifica el equipo para activación.
+`getFingerprint()` en main.ts: hash SHA-256 de `hostname + hasta 3 MACs` ordenadas, separadas por `|`, excluyendo interfaces que coincidan con `/virtual|loopback|vmware|vbox|vpn/i`. Truncado a 32 chars hex. Identifica el equipo para activación y para `/ai/extract-contacts`.
+
+**Trampa de estabilidad**: el filtro de nombres no excluye adaptadores Hyper-V (`vEthernet (Default Switch)`). Si el adaptador virtual se reinstala, su MAC cambia y el fingerprint cambia → `pc_mismatch`. Solución temporal: usar `/admin/transfer` + re-activar.
+
+## Módulo Clientes (página /clientes)
+
+Tabla `clientes` es la fuente única para todos los clientes, independiente del canal de entrada.
+
+**Columnas añadidas** (migraciones): `origen TEXT DEFAULT 'whatsapp'` · `actualizado_en TEXT`.  
+`origen` puede ser `'whatsapp'` | `'importado'` | `'manual'`.
+
+**Regla crítica en upsert**: nunca pisar `verificado` ni `foto_verificacion`. El SQL de upsert solo actualiza `nombre`, `origen`, `actualizado_en`:
+```sql
+INSERT INTO clientes (telefono, nombre, origen, actualizado_en)
+VALUES (?, ?, ?, datetime('now','localtime'))
+ON CONFLICT(telefono) DO UPDATE SET nombre=excluded.nombre, origen=excluded.origen, actualizado_en=excluded.actualizado_en
+```
+
+**`upsertClientesBatch(rows)`** en database.ts: patrón bulk estándar — `db.run()` en loop + `saveDB()` una vez al final.
+
+**`upsertClienteFromWA(telefono, nombre)`**: variante de inserción para alta automática desde WhatsApp. Solo rellena `nombre` si el registro existente tiene `nombre IS NULL` — nunca sobreescribe un nombre importado o manual. Se llama en `main.ts` ante cualquier mensaje entrante no-grupo, antes de invocar el bot.
+
+**`getClientesNombres()`**: retorna `Record<telefono, nombre>` de todos los clientes con nombre no nulo. Expuesto como `clientes:getNombres` IPC y usado en Chat.tsx como capa de override de nombre de mayor prioridad.
+
+**Importación Excel**: la lógica de parsing (`parseExcel`) vive en el renderer (`src/pages/Clientes.tsx`), no en el main process. Usa `await import('exceljs')` + `wb.xlsx.load(arrayBuffer)` (ExcelJS soporta ArrayBuffer en browser). Detecta headers automáticamente (`nombre/name/celular/phone/…`); sino auto-detecta columnas por heurística (texto = nombre, 7-15 dígitos = teléfono). Normaliza con la misma lógica que `normalizePhone` en main.ts.
+
+**Importación Word/PDF**: el botón acepta `.xlsx`, `.docx` y `.pdf`. Para Word/PDF, el renderer obtiene `(file as File & { path: string }).path` (disponible en Electron con `sandbox: false`) y llama `window.electronAPI.clientes.extractContactsFromDoc(filePath, ext, filename)`. El main process extrae el texto (`mammoth` para .docx, `pdfjs-dist/legacy/build/pdf.js` para .pdf) y llama al Worker `/ai/extract-contacts`. Razón para extraer en el main: la licencia/fingerprint están ahí, evita serializar ArrayBuffers grandes por IPC, y pdfjs-dist no requiere configurar worker en contexto browser.
+
+- `mammoth`: CJS puro, sin binarios nativos — `mammoth.extractRawText({ buffer: fs.readFileSync(path) })`
+- `pdfjs-dist@3` (pinado a v3): `require('pdfjs-dist/legacy/build/pdf.js')`. Debe fijar `GlobalWorkerOptions.workerSrc = false` antes de llamar `getDocument()`. Los warnings de canvas/DOMMatrix son inofensivos — canvas solo se necesita para rendering, no para extracción de texto.
+
+**`ContactosPreview`** (`src/components/ContactosPreview.tsx`): componente reutilizable de vista previa editable. Recibe `rows: ClienteImportRow[]` + `onConfirm/onCancel`. Muestra tabla editable con checkboxes, badges "Nuevo" / "Actualiza nombre". Usado tanto para Excel como para Word/PDF — no duplicar esta lógica.
 
 ## Reset de datos
 
