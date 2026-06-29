@@ -55,6 +55,7 @@ module.exports = {
       owner: 'julioatr1988-cmyk',
       repo: 'Alengo-asistente',
       private: false,
+      releaseType: 'release',
     },
   ],
 }
